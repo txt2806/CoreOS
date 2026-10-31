@@ -1,5 +1,2 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/hr-management/attendance/workforce-board/components/entrypoints";
-export { definition } from "@/features/hr-management/attendance/workforce-board/constants";
+export { WorkforceBoardPage } from "./components/page";
+export type { Presence, PresenceStatus, PresenceSummary } from "./types";

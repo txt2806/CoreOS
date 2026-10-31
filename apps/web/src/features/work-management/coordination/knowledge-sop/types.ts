@@ -1,61 +1,48 @@
-import { z } from "zod";
-const recordInput = z
-  .object({
-    code: z.string().trim().min(1).max(100),
-    name: z.string().trim().min(1).max(500),
-    scope: z.string().trim().max(250).default(""),
-    status: z.enum(["Bản nháp", "Đã xuất bản", "Lưu trữ"]),
-    date: z.iso.date(),
-    assignee: z.string().trim().max(150).default(""),
-    note: z.string().trim().max(2000).default(""),
-  })
-  .strict();
-const recordPatch = recordInput
-  .omit({ scope: true, assignee: true, note: true })
-  .partial()
-  .extend({
-    scope: z.string().trim().max(250).optional(),
-    assignee: z.string().trim().max(150).optional(),
-    note: z.string().trim().max(2000).optional(),
-  });
-export const listQuery = z
-  .object({
-    page: z.coerce.number().int().min(1).max(100000).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(100),
-    q: z.string().trim().max(500).optional(),
-    scope: z.string().max(250).optional(),
-    status: z.string().max(150).optional(),
-    assignee: z.string().trim().max(150).optional(),
-  })
-  .strict();
-export const versionSchema = z
-  .object({ version: z.number().int().positive() })
-  .strict();
+/**
+ * Mirrors `apps/api/src/features/work-management/coordination/knowledge-sop/dto/knowledge-sop.dto.ts`.
+ * The `ARTICLE`/`SOP` lifecycle in `docs/specifications/KNOWLEDGE-SOP.md` is not in the
+ * contract yet — the API only stores a WorkNote with `fields.category/content/tags`.
+ */
+export const NOTE_STATUSES = ["Bản nháp", "Đã xuất bản", "Lưu trữ"] as const;
 
-export const fieldsSchema = z
-  .object({
-    category: z.string().trim().max(1000).optional(),
-    content: z.string().trim().max(20000).optional(),
-    tags: z.string().trim().max(1000).optional(),
-  })
-  .strict();
-export const createSchema = recordInput.extend({
-  fields: fieldsSchema.default({}),
-});
-export const updateSchema = recordPatch
-  .extend({
-    fields: fieldsSchema.optional(),
-    version: z.number().int().positive(),
-  })
-  .strict();
-export const recordSchema = createSchema.extend({
-  id: z.uuid(),
-  module: z.literal("notes"),
-  version: z.number().int().positive(),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
-});
-export type RecordInput = z.input<typeof createSchema>;
-export type RecordOutput = z.infer<typeof recordSchema>;
-export type RecordDto = RecordOutput;
-export type ListQuery = z.infer<typeof listQuery>;
+export type NoteStatus = (typeof NOTE_STATUSES)[number];
+
+export interface NoteFields {
+  category?: string;
+  content?: string;
+  tags?: string;
+}
+
+export interface KnowledgeNote {
+  id: string;
+  module: "notes";
+  code: string;
+  name: string;
+  scope: string;
+  status: NoteStatus;
+  date: string;
+  assignee: string;
+  note: string;
+  fields: NoteFields;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteInput {
+  code: string;
+  name: string;
+  scope: string;
+  status: NoteStatus;
+  date: string;
+  assignee: string;
+  note: string;
+  fields: NoteFields;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}

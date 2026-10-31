@@ -1,4 +1,5 @@
-export type BoardTask = {
+/** The board never imports the tasks feature; it receives a structural shape. */
+export interface BoardTask {
   id: string;
   code: string;
   name: string;
@@ -6,14 +7,25 @@ export type BoardTask = {
   date: string;
   assignee: string;
   reviewer: string;
-  priority?: string;
-  project?: string;
-  /** Statuses the signed-in actor may move this task to right now. */
-  available: string[];
-  /** Blocks drag/drop while a proposal is waiting for a manager. */
-  locked?: boolean;
-  /** Open `BLOCKS` predecessors; the card advertises the wait before a move fails. */
-  blocked?: number;
-};
+  version: number;
+  fields: { priority?: string };
+}
 
-export type BoardMove = (taskId: string, toStatus: string) => void;
+export interface BoardMove {
+  to: string;
+  blockedBy: number;
+}
+
+export interface BoardColumn {
+  status: string;
+  label: string;
+}
+
+export interface KanbanBoardProps {
+  tasks: BoardTask[];
+  /** Legal target statuses per task id, straight from the workflow rules. */
+  allowed: Record<string, BoardMove[]>;
+  pendingId?: string | null;
+  onMove: (task: BoardTask, to: string) => void;
+  onOpen: (task: BoardTask) => void;
+}

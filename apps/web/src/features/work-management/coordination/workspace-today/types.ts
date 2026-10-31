@@ -1,80 +1,76 @@
-import { z } from "zod";
-const recordInput = z
-  .object({
-    code: z.string().trim().min(1).max(100),
-    name: z.string().trim().min(1).max(500),
-    scope: z.string().trim().max(250).default(""),
-    status: z.enum(["Đang dùng", "Đã ẩn"]),
-    date: z.iso.date(),
-    assignee: z.string().trim().max(150).default(""),
-    note: z.string().trim().max(2000).default(""),
-  })
-  .strict();
-const recordPatch = recordInput
-  .omit({ scope: true, assignee: true, note: true })
-  .partial()
-  .extend({
-    scope: z.string().trim().max(250).optional(),
-    assignee: z.string().trim().max(150).optional(),
-    note: z.string().trim().max(2000).optional(),
-  });
-export const listQuery = z
-  .object({
-    page: z.coerce.number().int().min(1).max(100000).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(100),
-    q: z.string().trim().max(500).optional(),
-    scope: z.string().max(250).optional(),
-    status: z.string().max(150).optional(),
-    assignee: z.string().trim().max(150).optional(),
-  })
-  .strict();
-export const versionSchema = z
-  .object({ version: z.number().int().positive() })
-  .strict();
+/** Shapes mirrored from the endpoints this screen reads. No invented fields. */
 
-export const fieldsSchema = z
-  .object({
-    url: z.union([z.url({ protocol: /^https?$/ }), z.literal("")]).optional(),
-    category: z.string().trim().max(1000).optional(),
-  })
-  .strict();
-export const createSchema = recordInput.extend({
-  fields: fieldsSchema.default({}),
-});
-export const updateSchema = recordPatch
-  .extend({
-    fields: fieldsSchema.optional(),
-    version: z.number().int().positive(),
-  })
-  .strict();
-export const recordSchema = createSchema.extend({
-  id: z.uuid(),
-  module: z.literal("home"),
-  version: z.number().int().positive(),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
-});
-export type RecordInput = z.input<typeof createSchema>;
-export type RecordOutput = z.infer<typeof recordSchema>;
-export type RecordDto = RecordOutput;
-export type ListQuery = z.infer<typeof listQuery>;
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+    mustChangePassword: boolean;
+  };
+  idleMinutes: number;
+  expiresAt: string;
+}
 
-export const workspaceSummarySchema = z.object({
-  totalTasks: z.number(),
-  completedTasks: z.number(),
-  overdueTasks: z.number(),
-  projects: z.number(),
-  pendingRequests: z.number(),
-  todayEvents: z.number(),
-  completionRate: z.number(),
-  tasks: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      status: z.string(),
-      date: z.string(),
-      assignee: z.string(),
-    }),
-  ),
-  updatedAt: z.string(),
-});
+export interface Attendance {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  workDate: string;
+  checkIn: string;
+  checkOut: string | null;
+  source: "WEB" | "MOBILE" | "KIOSK" | "MANUAL";
+  note: string;
+  status: "OPEN" | "COMPLETE" | "LOCKED";
+  version: number;
+}
+
+export interface TodayTask {
+  id: string;
+  code: string;
+  name: string;
+  scope: string;
+  status: string;
+  date: string;
+}
+
+export interface Notice {
+  id: string;
+  title: string;
+  body: string;
+  link: string;
+  source: string;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface Approval {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+  date: string;
+  assignee: string;
+  fields: { requester?: string; category?: string; amount?: number };
+}
+
+export interface InboxEntry {
+  request: Approval;
+  step: { sequence: number; status: string; quorum: string };
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}

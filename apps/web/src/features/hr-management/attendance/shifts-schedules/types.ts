@@ -1,176 +1,161 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/hr-management/attendance/shifts-schedules/dto/shifts-schedules.dto.ts`.
+ * The controller persists three resources — shifts, weekly patterns and per-day
+ * assignments — so all three get a real UI here.
+ */
+export const SHIFT_STATUSES = ["ACTIVE", "INACTIVE"] as const;
+export type ShiftStatus = (typeof SHIFT_STATUSES)[number];
 
-export const statusSchema = z.enum(["ACTIVE", "INACTIVE"]);
-export const sourceSchema = z.enum(["MANUAL", "PATTERN"]);
-const clockTime = z
-  .string()
-  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Giờ phải có dạng HH:mm");
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+export const ASSIGNMENT_SOURCES = ["MANUAL", "PATTERN"] as const;
+export type AssignmentSource = (typeof ASSIGNMENT_SOURCES)[number];
 
-export const shiftInput = z
-  .object({
-    name: z.string().trim().min(1, "Nhập tên ca").max(150),
-    startTime: clockTime,
-    endTime: clockTime,
-    breakMinutes: z.number().int().min(0).max(240).default(0),
-    nightShift: z.boolean().default(false),
-    effectiveFrom: dateKey,
-    note: z.string().trim().max(500).default(""),
-    status: statusSchema.default("ACTIVE"),
-  })
-  .strict();
+export interface ShiftTemplate {
+  id: string;
+  name: string;
+  /** HH:mm. */
+  startTime: string;
+  endTime: string;
+  breakMinutes: number;
+  nightShift: boolean;
+  /** YYYY-MM-DD — assignments before this date are refused by the server. */
+  effectiveFrom: string;
+  note: string;
+  status: ShiftStatus;
+  /** Paid hours after the break, computed by the server. */
+  hours: number;
+  assignmentCount: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const shiftSchema = z
-  .object({
-    id: z.uuid(),
-    name: z.string(),
-    startTime: z.string(),
-    endTime: z.string(),
-    breakMinutes: z.number(),
-    nightShift: z.boolean(),
-    effectiveFrom: z.string(),
-    note: z.string(),
-    status: statusSchema,
-    hours: z.number(),
-    assignmentCount: z.number(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface ShiftInput {
+  name: string;
+  startTime: string;
+  endTime: string;
+  breakMinutes: number;
+  nightShift: boolean;
+  effectiveFrom: string;
+  note: string;
+  status: ShiftStatus;
+}
 
-const slot = z.object({
-  weekday: z.number().int().min(1).max(7),
-  shiftId: z.uuid(),
-});
+export interface ShiftPatch extends Partial<ShiftInput> {
+  version: number;
+}
 
-export const patternInput = z
-  .object({
-    name: z.string().trim().min(1, "Nhập tên mẫu tuần").max(150),
-    slots: z
-      .array(slot)
-      .min(1, "Chọn ít nhất một ngày trong mẫu")
-      .max(7)
-      .refine(
-        (slots) =>
-          new Set(slots.map((item) => item.weekday)).size === slots.length,
-        "Mỗi thứ chỉ được gán một ca trong mẫu",
-      ),
-    note: z.string().trim().max(500).default(""),
-    status: statusSchema.default("ACTIVE"),
-  })
-  .strict();
+/** 1 = Monday … 7 = Sunday, matching the API. */
+export interface PatternSlot {
+  weekday: number;
+  shiftId: string;
+}
 
-export const patternSchema = z
-  .object({
-    id: z.uuid(),
-    name: z.string(),
-    slots: z.array(slot),
-    note: z.string(),
-    status: statusSchema,
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface SchedulePattern {
+  id: string;
+  name: string;
+  slots: PatternSlot[];
+  note: string;
+  status: ShiftStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const assignmentInput = z
-  .object({
-    employeeId: z.string().trim().min(1, "Chọn nhân sự").max(64),
-    employeeName: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-    workDate: dateKey,
-    shiftId: z.uuid(),
-    source: sourceSchema.default("MANUAL"),
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+export interface PatternInput {
+  name: string;
+  slots: PatternSlot[];
+  note: string;
+  status: ShiftStatus;
+}
 
-export const assignmentSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    workDate: z.string(),
-    shiftId: z.uuid(),
-    source: sourceSchema,
-    note: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface PatternPatch extends Partial<PatternInput> {
+  version: number;
+}
 
-export const bulkInput = z
-  .object({
-    shiftId: z.uuid(),
-    from: dateKey,
-    to: dateKey,
-    weekdays: z
-      .array(z.number().int().min(1).max(7))
-      .min(1, "Chọn ít nhất một thứ"),
-    employees: z
-      .array(
-        z.object({
-          id: z.string().trim().min(1, "Nhập mã nhân sự").max(64),
-          name: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-        }),
-      )
-      .min(1, "Chọn ít nhất một nhân sự")
-      .max(200),
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+export interface ScheduleAssignment {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  workDate: string;
+  shiftId: string;
+  source: AssignmentSource;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const applyInput = z
-  .object({
-    from: dateKey,
-    to: dateKey,
-    employees: z
-      .array(
-        z.object({
-          id: z.string().trim().min(1, "Nhập mã nhân sự").max(64),
-          name: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-        }),
-      )
-      .min(1, "Chọn ít nhất một nhân sự")
-      .max(200),
-  })
-  .strict();
+export interface AssignmentInput {
+  employeeId: string;
+  employeeName: string;
+  workDate: string;
+  shiftId: string;
+  source: AssignmentSource;
+  note: string;
+}
 
-export const bulkResultSchema = z.object({
-  created: z.number(),
-  skipped: z.number(),
-  total: z.number(),
-  days: z.number(),
-  employees: z.number(),
-});
+export interface AssignmentPatch {
+  shiftId?: string;
+  employeeName?: string;
+  note?: string;
+  version: number;
+}
 
-export const applyResultSchema = z.object({
-  created: z.number(),
-  skipped: z.number(),
-  total: z.number(),
-  employees: z.number(),
-  pattern: z.string(),
-});
+export interface BulkInput {
+  shiftId: string;
+  from: string;
+  to: string;
+  weekdays: number[];
+  employees: { id: string; name: string }[];
+  note: string;
+}
 
-export const listSchema = <T extends z.ZodType>(item: T) =>
-  z.object({
-    items: z.array(item),
-    total: z.number(),
-    page: z.number(),
-    pageSize: z.number(),
-  });
+export interface ApplyPatternInput {
+  from: string;
+  to: string;
+  employees: { id: string; name: string }[];
+}
 
-export type Status = z.infer<typeof statusSchema>;
-export type BulkInput = z.input<typeof bulkInput>;
-export type ApplyInput = z.input<typeof applyInput>;
-export type BulkResult = z.infer<typeof bulkResultSchema>;
-export type ApplyResult = z.infer<typeof applyResultSchema>;
-export type ShiftDto = z.infer<typeof shiftSchema>;
-export type ShiftInput = z.input<typeof shiftInput>;
-export type PatternDto = z.infer<typeof patternSchema>;
-export type PatternInput = z.input<typeof patternInput>;
-export type AssignmentDto = z.infer<typeof assignmentSchema>;
-export type AssignmentInput = z.input<typeof assignmentInput>;
+/**
+ * `POST /assignments/bulk` and `POST /patterns/:id/apply` both answer with the
+ * write counts plus what the request asked for.
+ */
+export interface BulkResult {
+  created: number;
+  skipped: number;
+  total: number;
+  days?: number;
+  employees: number;
+  pattern?: string;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+  };
+}
+
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}

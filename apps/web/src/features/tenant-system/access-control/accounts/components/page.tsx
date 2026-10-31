@@ -1,347 +1,498 @@
 "use client";
-import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type {
-  AccountDto,
-  AccountRole,
-  AccountStatus,
-} from "@/features/tenant-system/access-control/accounts/types";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { EXPORT_FILE_PREFIX, ROLE_LABELS, STATUS_LABELS } from "../constants";
+import { downloadCsv, formatDateTime, today } from "../format";
+import { useAccounts, type Feedback } from "../hooks/use-accounts";
+import type { Account, AccountRole, AccountStatus } from "../types";
+import { AccessDialog, ResetPasswordDialog, type AccessPatch } from "./access-dialogs";
+import { CreateAccountDialog, EditAccountDialog, type EditDraft } from "./account-form";
+import { AccountDetailSheet } from "./detail-sheet";
 import {
-  definition,
-  roleLabels,
-  statusLabels,
-} from "@/features/tenant-system/access-control/accounts/constants";
-import { useAccounts } from "@/features/tenant-system/access-control/accounts/hooks/use-accounts";
-import { Modal } from "@/features/tenant-system/access-control/accounts/components/primitives/workspace";
-import { Button } from "@/features/tenant-system/access-control/accounts/components/primitives/button";
+  CloseGlyph,
+  DownloadGlyph,
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+} from "./primitives";
 import {
-  Input,
-  Select,
-} from "@/features/tenant-system/access-control/accounts/components/primitives/forms";
-import { Badge } from "@/features/tenant-system/access-control/accounts/components/primitives/foundations";
-import { AccountForm } from "@/features/tenant-system/access-control/accounts/components/account-form";
-import { AccessDialog } from "@/features/tenant-system/access-control/accounts/components/access-dialog";
-import { PasswordDialog } from "@/features/tenant-system/access-control/accounts/components/password-dialog";
-import { HistoryDialog } from "@/features/tenant-system/access-control/accounts/components/history-dialog";
-const formatDate = (value: string) =>
-  new Intl.DateTimeFormat("vi-VN", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(new Date(value));
-function AccountBadges({ record }: { record: AccountDto }) {
-  return (
-    <span className="flex flex-wrap gap-1">
-      <Badge variant={record.role === "MANAGER" ? "brand" : "neutral"}>
-        {roleLabels[record.role]}
-      </Badge>
-      {record.isSystemAdmin && <Badge variant="warning">Quản trị</Badge>}
-      <Badge variant={record.status === "ACTIVE" ? "success" : "danger"} dot>
-        {statusLabels[record.status]}
-      </Badge>
-    </span>
-  );
+  ALL_COLUMNS,
+  COLUMN_LABELS,
+  OPTIONAL_COLUMNS,
+  AccountTable,
+  nextSort,
+  sortAccounts,
+  type ColumnKey,
+  type SortState,
+} from "./table";
+import { SessionBanner } from "./session-banner";
+
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+const ROLE_VALUES: readonly AccountRole[] = ["EMPLOYEE", "MANAGER"];
+const STATUS_VALUES: readonly AccountStatus[] = ["ACTIVE", "LOCKED"];
+
+function asRole(value: string): AccountRole | "" {
+  return ROLE_VALUES.find((role) => role === value) ?? "";
 }
-export function ModulePage() {
-  const params = useSearchParams();
-  const { accounts, loading, error, reload } = useAccounts();
-  const [query, setQuery] = useState("");
-  const [role, setRole] = useState<AccountRole | "ALL">(
-    params.get("role") === "MANAGER" || params.get("role") === "EMPLOYEE"
-      ? (params.get("role") as AccountRole)
-      : "ALL",
-  );
-  const [status, setStatus] = useState<AccountStatus | "ALL">(
-    params.get("status") === "ACTIVE" || params.get("status") === "LOCKED"
-      ? (params.get("status") as AccountStatus)
-      : "ALL",
-  );
+
+function asStatus(value: string): AccountStatus | "" {
+  return STATUS_VALUES.find((status) => status === value) ?? "";
+}
+
+function share(value: number, total: number): string {
+  if (!total) return "chưa có dữ liệu";
+  return `${Math.round((value / total) * 100)}% trên tổng`;
+}
+
+export function AccountsPage() {
+  const accounts = useAccounts();
+  const [sort, setSort] = useState<SortState>({ key: "account", dir: "asc" });
+  const [hidden, setHidden] = useState<ColumnKey[]>(["email"]);
+  const [columnsOpen, setColumnsOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<AccountDto | null>(null);
-  const [changingAccess, setChangingAccess] = useState<AccountDto | null>(null);
-  const [resetting, setResetting] = useState<AccountDto | null>(null);
-  const [viewingHistory, setViewingHistory] = useState<AccountDto | null>(null);
-  const filtered = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase("vi");
-    return accounts.filter(
-      (item) =>
-        (role === "ALL" || item.role === role) &&
-        (status === "ALL" || item.status === status) &&
-        (!term ||
-          `${item.username} ${item.displayName} ${item.email} ${item.employeeCode}`
-            .toLocaleLowerCase("vi")
-            .includes(term)),
-    );
-  }, [accounts, query, role, status]);
-  const managers = accounts.filter((item) => item.role === "MANAGER").length;
-  const locked = accounts.filter((item) => item.status === "LOCKED").length;
-  const openAccess = (record: AccountDto) => setChangingAccess(record);
-  const actions = (record: AccountDto) => (
-    <div className="flex flex-wrap justify-end gap-1">
-      <Button variant="ghost" size="sm" onClick={() => setEditing(record)}>
-        Sửa
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => openAccess(record)}
-        aria-label={`Phân quyền ${record.username}`}
-      >
-        Phân quyền
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setResetting(record)}
-        aria-label={`Đặt lại mật khẩu ${record.username}`}
-      >
-        Mật khẩu
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setViewingHistory(record)}
-        aria-label={`Lịch sử quyền ${record.username}`}
-      >
-        Lịch sử
-      </Button>
-    </div>
+  const [editing, setEditing] = useState<Account | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [lockTarget, setLockTarget] = useState<{ account: Account; mode: "lock" | "unlock" } | null>(
+    null,
   );
+  const [resetTarget, setResetTarget] = useState<Account | null>(null);
+
+  /* The optimistic status flip must survive until the server answer lands. */
+  const rows = useMemo(
+    () =>
+      sortAccounts(
+        accounts.data.items.map((account) => {
+          const optimistic = accounts.optimistic[account.id];
+          return optimistic ? { ...account, status: optimistic } : account;
+        }),
+        sort,
+      ),
+    [accounts.data.items, accounts.optimistic, sort],
+  );
+
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const close = () => setColumnsOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setColumnsOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [columnsOpen]);
+
+  const toggleColumn = (key: ColumnKey) => {
+    setHidden((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  };
+
+  const exportRows = (list: Account[]) => {
+    const header = [
+      "Tên đăng nhập",
+      "Tên hiển thị",
+      "Email",
+      "Mã nhân viên",
+      "Vai trò",
+      "Quản trị hệ thống",
+      "Trạng thái",
+      "Lý do khoá",
+      "Đăng nhập gần nhất",
+      "Cập nhật",
+    ];
+    const body = list.map((account) => [
+      account.username,
+      account.displayName,
+      account.email,
+      account.employeeCode,
+      ROLE_LABELS[account.role],
+      account.isSystemAdmin ? "Có" : "Không",
+      STATUS_LABELS[account.status],
+      account.lockedReason,
+      account.lastLoginAt ? formatDateTime(account.lastLoginAt) : "",
+      formatDateTime(account.updatedAt),
+    ]);
+    downloadCsv(`${EXPORT_FILE_PREFIX}-${today()}.csv`, [header, ...body]);
+    accounts.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${list.length} tài khoản ra tệp CSV.`,
+    });
+  };
+
+  const detail = openId ? (accounts.data.items.find((item) => item.id === openId) ?? null) : null;
+  const totals = accounts.totals;
+  const unauthenticated = accounts.actorMissing;
+  const forbidden = accounts.error?.status === 403;
+
   return (
-    <div className="module-view">
-      <section className="records-panel">
-        <div className="page-header">
-          <div>
-            <span className="eyebrow">Hệ thống · Truy cập</span>
-            <h1>{definition.title}</h1>
-            <p>
-              Chỉ có hai vai trò Nhân viên và Quản lý; chức danh không cấp
-              quyền. Mọi thay đổi quyền đều được lưu lịch sử.
-            </p>
-          </div>
-          <div className="page-actions">
-            <Button onClick={() => setCreating(true)}>Thêm tài khoản</Button>
-          </div>
-        </div>
-
-        <dl className="metric-strip">
-          <div className="metric">
-            <dt>Tổng tài khoản</dt>
-            <dd>{accounts.length}</dd>
-          </div>
-          <div className="metric">
-            <dt>Quản lý</dt>
-            <dd>{managers}</dd>
-          </div>
-          <div className="metric">
-            <dt>Đã khóa</dt>
-            <dd>{locked}</dd>
-          </div>
-        </dl>
-
-        <div className="toolbar">
-          <Input
-            aria-label="Tìm tài khoản"
-            placeholder="Tìm theo tên đăng nhập, tên hiển thị, email…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <Select
-            aria-label="Lọc vai trò"
-            value={role}
-            onChange={(event) =>
-              setRole(event.target.value as AccountRole | "ALL")
-            }
-          >
-            <option value="ALL">Tất cả vai trò</option>
-            <option value="MANAGER">{roleLabels.MANAGER}</option>
-            <option value="EMPLOYEE">{roleLabels.EMPLOYEE}</option>
-          </Select>
-          <Select
-            aria-label="Lọc trạng thái"
-            value={status}
-            onChange={(event) =>
-              setStatus(event.target.value as AccountStatus | "ALL")
-            }
-          >
-            <option value="ALL">Tất cả trạng thái</option>
-            <option value="ACTIVE">{statusLabels.ACTIVE}</option>
-            <option value="LOCKED">{statusLabels.LOCKED}</option>
-          </Select>
-          <span className="text-sm text-muted-foreground">
-            {filtered.length} tài khoản
-          </span>
-        </div>
-
-        {error && (
-          <div role="alert" className="error">
-            {error}
-            <Button variant="ghost" onClick={reload}>
-              Thử lại
-            </Button>
-          </div>
-        )}
-
-        {loading ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Đang tải danh sách tài khoản…
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Kiểm soát truy cập</p>
+          <h1>Tài khoản</h1>
+          <p className="page-lede">
+            Cấp tài khoản nội bộ, khoá khi cần và giữ lại toàn bộ dấu vết thay đổi quyền. Tài khoản
+            không bị xoá — chỉ bị khoá — để lịch sử kiểm toán còn nguyên.
           </p>
-        ) : !filtered.length ? (
-          <div className="rounded-panel border border-border bg-surface p-4">
-            <h2 className="text-sm font-semibold">
-              {accounts.length
-                ? "Không có tài khoản phù hợp"
-                : "Chưa có tài khoản"}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {accounts.length
-                ? "Xóa hoặc đổi điều kiện lọc để xem lại."
-                : "Tạo tài khoản Quản lý đầu tiên để bắt đầu cấu hình quyền."}
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => exportRows(rows)}
+            disabled={rows.length === 0}
+            title="Xuất các dòng đang hiển thị ra CSV"
+          >
+            <DownloadGlyph /> Xuất CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setCreating(true)}
+            disabled={!accounts.canManage && !(totals?.all === 0)}
+            title={
+              accounts.canManage || totals?.all === 0
+                ? "Tạo tài khoản mới"
+                : "Chỉ quản trị hệ thống mới tạo được tài khoản"
+            }
+          >
+            <PlusGlyph /> Tạo tài khoản
+          </button>
+        </div>
+      </header>
+
+      {totals ? (
+        <section className="metric-strip" aria-label="Số lượng tài khoản theo trạng thái">
+          <div className="metric">
+            <span className="metric-value tabular">{totals.all.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Tổng tài khoản</span>
+            <span className="metric-note">gồm cả tài khoản đang khoá</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{totals.active.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Đang hoạt động</span>
+            <span className="metric-note">{share(totals.active, totals.all)}</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{totals.locked.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Đang khoá</span>
+            <span className="metric-note">không đăng nhập được</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{totals.managers.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Quản lý</span>
+            <span className="metric-note">{share(totals.managers, totals.all)}</span>
+          </div>
+        </section>
+      ) : null}
+
+      <SessionBanner />
+
+      {accounts.feedback ? (
+        <div className={ALERT_TONE[accounts.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{accounts.feedback.message}</span>
+            {accounts.feedback.hint ? (
+              <span className="muted">{accounts.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => accounts.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="account-search"
+                  className="input"
+                  type="search"
+                  value={accounts.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo tên, tên đăng nhập, email, mã nhân viên…"
+                  aria-label="Tìm tài khoản"
+                  onChange={(event) => accounts.patchQuery({ q: event.target.value, page: 1 })}
+                />
+                {accounts.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => accounts.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={accounts.query.role}
+                aria-label="Lọc theo vai trò"
+                onChange={(event) => accounts.patchQuery({ role: asRole(event.target.value), page: 1 })}
+                style={{ width: 168 }}
+              >
+                <option value="">Mọi vai trò</option>
+                <option value="EMPLOYEE">Nhân viên</option>
+                <option value="MANAGER">Quản lý</option>
+              </select>
+
+              <select
+                className="select"
+                value={accounts.query.status}
+                aria-label="Lọc theo trạng thái"
+                onChange={(event) =>
+                  accounts.patchQuery({ status: asStatus(event.target.value), page: 1 })
+                }
+                style={{ width: 176 }}
+              >
+                <option value="">Mọi trạng thái</option>
+                <option value="ACTIVE">Đang hoạt động</option>
+                <option value="LOCKED">Đang khoá</option>
+              </select>
+
+              <div className="popover-anchor">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-expanded={columnsOpen}
+                  aria-haspopup="true"
+                  onClick={() => setColumnsOpen((open) => !open)}
+                >
+                  Cột hiển thị
+                </button>
+                {columnsOpen ? (
+                  <div className="menu" role="group" aria-label="Chọn cột hiển thị">
+                    {OPTIONAL_COLUMNS.map((key) => (
+                      <label key={key} className="menu-item">
+                        <input
+                          type="checkbox"
+                          checked={!hidden.includes(key)}
+                          onChange={() => toggleColumn(key)}
+                        />
+                        {COLUMN_LABELS[key]}
+                      </label>
+                    ))}
+                    <button type="button" className="menu-item" onClick={() => setHidden([])}>
+                      Hiện tất cả {ALL_COLUMNS.length} cột
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {accounts.data.total.toLocaleString("vi-VN")} tài khoản
+                {accounts.filtersActive ? ` · ${rows.length} dòng khớp` : ""}
+              </span>
+            </div>
+          </div>
+
+          {accounts.filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {accounts.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{accounts.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => accounts.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {accounts.query.role ? (
+                <span className="chip" data-active="true">
+                  Vai trò: {ROLE_LABELS[accounts.query.role]}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => accounts.patchQuery({ role: "", page: 1 })}
+                    aria-label="Bỏ lọc vai trò"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {accounts.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {STATUS_LABELS[accounts.query.status]}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => accounts.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={accounts.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {unauthenticated || forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">
+              {unauthenticated ? "Phiên đăng nhập đã hết hạn" : "Bạn chưa được cấp quyền xem tài khoản"}
+            </span>
+            <p className="empty-body">
+              {unauthenticated
+                ? "Đăng nhập lại để tiếp tục. Danh sách tài khoản chỉ mở cho phiên hợp lệ."
+                : "Yêu cầu quản trị hệ thống cấp quyền “Xem” cho phân hệ Kiểm soát truy cập rồi tải lại trang."}
             </p>
-            {!accounts.length && (
-              <Button size="sm" onClick={() => setCreating(true)}>
-                Thêm tài khoản
-              </Button>
+            {unauthenticated ? (
+              <Link className="btn btn-primary" href="/tenant-system/auth">
+                Tới trang đăng nhập
+              </Link>
+            ) : (
+              <button type="button" className="btn btn-ghost" onClick={accounts.reload}>
+                Tải lại
+              </button>
+            )}
+          </div>
+        ) : accounts.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách tài khoản</span>
+            <p className="empty-body">{accounts.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={accounts.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : !accounts.loading && rows.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {accounts.filtersActive
+                ? "Không có tài khoản nào khớp bộ lọc"
+                : "Chưa có tài khoản nào"}
+            </span>
+            <p className="empty-body">
+              {accounts.filtersActive
+                ? "Thử bỏ một vài điều kiện, hoặc xoá hết bộ lọc để xem toàn bộ danh sách."
+                : "Tạo tài khoản đầu tiên — bắt buộc là Quản lý kèm quyền quản trị hệ thống — để bắt đầu cấp quyền cho đội."}
+            </p>
+            {accounts.filtersActive ? (
+              <button type="button" className="btn btn-ghost" onClick={accounts.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            ) : (
+              <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+                <PlusGlyph /> Tạo tài khoản
+              </button>
             )}
           </div>
         ) : (
-          <>
-            <ul className="flex flex-col gap-2 sm:hidden">
-              {filtered.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex flex-col gap-2 rounded-panel border border-border bg-surface p-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-foreground">
-                      {item.displayName}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {item.username}
-                      {item.email ? ` · ${item.email}` : ""}
-                    </p>
-                  </div>
-                  <AccountBadges record={item} />
-                  <p className="text-xs text-muted-foreground">
-                    {item.employeeCode
-                      ? `Mã nhân viên ${item.employeeCode}`
-                      : "Chưa liên kết hồ sơ nhân sự"}
-                  </p>
-                  {actions(item)}
-                </li>
-              ))}
-            </ul>
-            <div className="relative hidden overflow-x-auto sm:block">
-              <table className="w-full border-collapse text-sm">
-                <caption className="sr-only">
-                  Danh sách tài khoản theo vai trò và trạng thái
-                </caption>
-                <thead>
-                  <tr className="text-left text-xs uppercase text-muted-foreground">
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Tài khoản
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Liên hệ
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Quyền
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Cập nhật
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      <span className="sr-only">Thao tác</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((item) => (
-                    <tr key={item.id} className="border-t border-border">
-                      <td className="px-2 py-3 align-top">
-                        <span className="block font-semibold text-foreground">
-                          {item.displayName}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">
-                          {item.username}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <span className="block">{item.email || "—"}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {item.employeeCode
-                            ? `Mã nhân viên ${item.employeeCode}`
-                            : "Chưa liên kết hồ sơ"}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <AccountBadges record={item} />
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <span className="block text-xs">
-                          {formatDate(item.updatedAt)}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">
-                          {item.mustChangePassword
-                            ? "Cần đổi mật khẩu"
-                            : "Mật khẩu đã đổi"}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">{actions(item)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+          <AccountTable
+            accounts={rows}
+            loading={accounts.loading}
+            sort={sort}
+            optimistic={accounts.optimistic}
+            pendingId={accounts.pendingId}
+            canManage={accounts.canManage}
+            hidden={hidden}
+            onSort={(key) => setSort((current) => nextSort(current, key))}
+            onOpen={(account) => setOpenId(account.id)}
+            onEdit={(account) => setEditing(account)}
+            onToggleLock={(account) =>
+              setLockTarget({
+                account,
+                mode: (accounts.optimistic[account.id] ?? account.status) === "ACTIVE" ? "lock" : "unlock",
+              })
+            }
+          />
         )}
 
-        <p className="text-xs text-muted-foreground">
-          Tài khoản không bị xóa cứng; khóa tài khoản khi nhân viên nghỉ việc và
-          không thể bớt Quản lý hoặc quản trị hệ thống cuối cùng.
-        </p>
-      </section>
+        {!unauthenticated && !forbidden && !accounts.error && rows.length > 0 ? (
+          <Pagination
+            page={accounts.query.page}
+            pageSize={accounts.query.pageSize}
+            total={accounts.data.total}
+            onPage={(page) => accounts.patchQuery({ page })}
+            onPageSize={(pageSize) => accounts.patchQuery({ pageSize, page: 1 })}
+          />
+        ) : null}
+      </div>
 
-      {creating && (
-        <Modal title="Thêm tài khoản" onClose={() => setCreating(false)}>
-          <AccountForm onClose={() => setCreating(false)} />
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Chỉnh sửa ${editing.displayName}`}
+      <p className="page-footnote">
+        Máy chủ sắp xếp theo trạng thái rồi tên hiển thị; bấm tiêu đề cột để sắp xếp lại các dòng
+        đang tải trên trang này. Tài khoản không có thao tác xoá — hãy khoá kèm lý do để giữ lịch sử
+        kiểm toán.
+      </p>
+
+      {detail ? (
+        <AccountDetailSheet
+          account={detail}
+          canManage={accounts.canManage}
+          pending={accounts.pendingId === detail.id}
+          onAccess={(patch) => accounts.setAccess(detail, patch)}
+          onEdit={() => setEditing(detail)}
+          onToggleLock={() =>
+            setLockTarget({ account: detail, mode: detail.status === "ACTIVE" ? "lock" : "unlock" })
+          }
+          onResetPassword={() => setResetTarget(detail)}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
+
+      {creating ? (
+        <CreateAccountDialog
+          firstAccount={accounts.data.total === 0}
+          onSubmit={(draft) => accounts.create(draft)}
+          onClose={() => setCreating(false)}
+        />
+      ) : null}
+
+      {editing ? (
+        <EditAccountDialog
+          account={editing}
+          onSubmit={(draft: EditDraft) => accounts.update(editing, draft)}
           onClose={() => setEditing(null)}
-        >
-          <AccountForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {changingAccess && (
-        <Modal
-          title={`Phân quyền ${changingAccess.displayName}`}
-          onClose={() => setChangingAccess(null)}
-        >
-          <AccessDialog
-            record={changingAccess}
-            onClose={() => setChangingAccess(null)}
-          />
-        </Modal>
-      )}
-      {resetting && (
-        <Modal title="Đặt lại mật khẩu" onClose={() => setResetting(null)}>
-          <PasswordDialog
-            record={resetting}
-            onClose={() => setResetting(null)}
-          />
-        </Modal>
-      )}
-      {viewingHistory && (
-        <Modal title="Lịch sử quyền" onClose={() => setViewingHistory(null)}>
-          <HistoryDialog
-            record={viewingHistory}
-            onClose={() => setViewingHistory(null)}
-          />
-        </Modal>
-      )}
+        />
+      ) : null}
+
+      {lockTarget ? (
+        <AccessDialog
+          account={lockTarget.account}
+          mode={lockTarget.mode}
+          onSubmit={(patch: AccessPatch) => accounts.setAccess(lockTarget.account, patch)}
+          onClose={() => setLockTarget(null)}
+        />
+      ) : null}
+
+      {resetTarget ? (
+        <ResetPasswordDialog
+          account={resetTarget}
+          onSubmit={(password, reason) => accounts.setPassword(resetTarget, password, reason)}
+          onClose={() => setResetTarget(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,114 +1,56 @@
-import type {
-  MilestoneStatus,
-  QaOutcome,
-} from "@/features/work-management/projects/milestones-qa/types";
+import type { MilestoneStatus, QaOutcome } from "./types";
 
-type Field = {
-  key: string;
-  label: string;
-  type: string;
-  options?: readonly string[];
-};
+/**
+ * Exact key the backend guards with `@RequirePermission` in
+ * `milestones-qa/milestones-qa.controller.ts` and `acceptance.controller.ts`.
+ */
+export const FEATURE_KEY = "work-management/projects/milestones-qa";
 
-export const statusLabel: Record<MilestoneStatus, string> = {
+export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 25;
+
+/** The API speaks English enums; every label the user reads is Vietnamese. */
+export const MILESTONE_STATUS_LABEL: Record<MilestoneStatus, string> = {
   PLANNED: "Lên kế hoạch",
-  IN_PROGRESS: "Đang triển khai",
+  IN_PROGRESS: "Đang thực hiện",
   COMPLETED: "Hoàn thành",
-  MISSED: "Trễ hạn",
-  CANCELLED: "Đã hủy",
+  MISSED: "Quá hạn",
+  CANCELLED: "Đã huỷ",
 };
 
-export const definition = {
-  id: "work-management/milestones",
-  icon: 3,
-  label: "Mốc & QA",
-  title: "Mốc & QA",
-  singular: "mốc",
-  dateLabel: "Ngày đích",
-  personLabel: "Người phụ trách",
-  tabs: [],
-  sections: [],
-  statuses: Object.values(statusLabel),
-  fields: [
-    {
-      key: "contractRef",
-      label: "Tham chiếu hợp đồng",
-      type: "text",
-    },
-    {
-      key: "projectId",
-      label: "Dự án",
-      type: "text",
-    },
-  ],
-  navigation: {
-    title: "Mốc & QA",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      {
-        label: "Tất cả",
-        href: "/work-management/milestones",
-      },
-      ...(Object.entries(statusLabel) as [MilestoneStatus, string][]).map(
-        ([value, label]) => ({
-          label,
-          href: `/work-management/milestones?status=${value}&section=${label}`,
-        }),
-      ),
-    ],
-  },
-} as const;
-
-export const fields: readonly Field[] = definition.fields;
-
-export const statusTone: Record<
-  MilestoneStatus,
-  "neutral" | "info" | "success" | "danger" | "warning"
-> = {
-  PLANNED: "neutral",
-  IN_PROGRESS: "info",
-  COMPLETED: "success",
-  MISSED: "danger",
-  CANCELLED: "neutral",
+export const MILESTONE_STATUS_TONE: Record<MilestoneStatus, string> = {
+  PLANNED: "badge",
+  IN_PROGRESS: "badge badge-info",
+  COMPLETED: "badge badge-success",
+  MISSED: "badge badge-danger",
+  CANCELLED: "badge",
 };
 
-export const moveLabel: Record<MilestoneStatus, string> = {
-  PLANNED: "Đưa về kế hoạch",
-  IN_PROGRESS: "Bắt đầu triển khai",
-  COMPLETED: "Đánh dấu hoàn thành",
-  MISSED: "Đánh dấu trễ hạn",
-  CANCELLED: "Hủy mốc",
-};
-
-export const outcomeLabel: Record<QaOutcome, string> = {
+export const QA_OUTCOME_LABEL: Record<QaOutcome, string> = {
   PASS: "Đạt",
   FAIL: "Không đạt",
   BLOCKED: "Bị chặn",
 };
 
-export const outcomeTone: Record<QaOutcome, "success" | "danger" | "warning"> =
-  {
-    PASS: "success",
-    FAIL: "danger",
-    BLOCKED: "warning",
-  };
+export const QA_OUTCOME_TONE: Record<QaOutcome, string> = {
+  PASS: "badge badge-success",
+  FAIL: "badge badge-danger",
+  BLOCKED: "badge badge-warning",
+};
 
-/** Office-time date so the UI and the API agree on "today". */
-export function officeToday() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Ho_Chi_Minh",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
+/**
+ * `GET /milestones?status=` filters the *stored* status, and `MISSED` is only ever
+ * derived from `targetDate` — filtering by it would always return nothing, so the
+ * select omits it and the table shows overdue per row instead.
+ */
+export const FILTER_STATUSES: MilestoneStatus[] = [
+  "PLANNED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+];
 
-export function progressOf(milestone: {
-  completedCount: number;
-  itemCount: number;
-}) {
-  if (!milestone.itemCount) return 0;
-  return Math.round((milestone.completedCount / milestone.itemCount) * 100);
-}
+/** A milestone inside this window is called out before it becomes overdue. */
+export const SOON_WINDOW_DAYS = 7;
+
+export const EXPORT_FILE_PREFIX = "moc-va-qa";

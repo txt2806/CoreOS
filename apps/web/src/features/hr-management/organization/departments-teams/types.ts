@@ -1,72 +1,94 @@
-import { z } from "zod";
-export const statusSchema = z.enum(["ACTIVE", "INACTIVE"]);
-// Patch gửi lên phải không có default: Zod giữ default qua `.partial()` nên field
-// bị bỏ trống sẽ bị ghi đè về giá trị mặc định.
-const departmentFields = {
-  code: z.string().trim().min(1, "Nhập mã phòng ban").max(50),
-  name: z.string().trim().min(1, "Nhập tên phòng ban").max(200),
-  description: z.string().trim().max(2000),
-  managerName: z.string().trim().max(150),
-  status: statusSchema,
-};
-const teamFields = {
-  departmentId: z.uuid(),
-  code: z.string().trim().min(1, "Nhập mã nhóm").max(50),
-  name: z.string().trim().min(1, "Nhập tên nhóm").max(200),
-  description: z.string().trim().max(2000),
-  managerName: z.string().trim().max(150),
-  status: statusSchema,
-};
-export const departmentInput = z
-  .object({
-    ...departmentFields,
-    description: departmentFields.description.default(""),
-    managerName: departmentFields.managerName.default(""),
-    status: departmentFields.status.default("ACTIVE"),
-  })
-  .strict();
-export const departmentPatch = z.object(departmentFields).partial();
-export const teamInput = z
-  .object({
-    ...teamFields,
-    description: teamFields.description.default(""),
-    managerName: teamFields.managerName.default(""),
-    status: teamFields.status.default("ACTIVE"),
-  })
-  .strict();
-export const teamPatch = z
-  .object(teamFields)
-  .omit({ departmentId: true })
-  .partial();
-export const departmentSchema = z
-  .object({
-    ...departmentFields,
-    id: z.uuid(),
-    teamCount: z.number().int().min(0),
-    activeTeamCount: z.number().int().min(0),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export const teamSchema = z
-  .object({
-    ...teamFields,
-    id: z.uuid(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export const listSchema = <T extends z.ZodType>(item: T) =>
-  z.object({
-    items: z.array(item),
-    total: z.number(),
-    page: z.number(),
-    pageSize: z.number(),
-  });
-export type Status = z.infer<typeof statusSchema>;
-export type DepartmentInput = z.input<typeof departmentInput>;
-export type DepartmentDto = z.infer<typeof departmentSchema>;
-export type TeamInput = z.input<typeof teamInput>;
-export type TeamDto = z.infer<typeof teamSchema>;
+/**
+ * Mirrors `apps/api/src/features/hr-management/organization/departments-teams/
+ * dto/departments-teams.dto.ts` field for field.
+ */
+export const ORG_STATUSES = ["ACTIVE", "INACTIVE"] as const;
+export type OrgStatus = (typeof ORG_STATUSES)[number];
+
+export interface Department {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  managerName: string;
+  status: OrgStatus;
+  teamCount: number;
+  activeTeamCount: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Team {
+  id: string;
+  departmentId: string;
+  code: string;
+  name: string;
+  description: string;
+  managerName: string;
+  status: OrgStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `createDepartmentSchema` defaults `description`, `managerName` and `status`. */
+export interface DepartmentInput {
+  code: string;
+  name: string;
+  description: string;
+  managerName: string;
+  status: OrgStatus;
+}
+
+/** `updateDepartmentSchema` is `.partial()` plus a mandatory `version`. */
+export interface DepartmentPatch {
+  code?: string;
+  name?: string;
+  description?: string;
+  managerName?: string;
+  status?: OrgStatus;
+  version: number;
+}
+
+export interface TeamInput {
+  departmentId: string;
+  code: string;
+  name: string;
+  description: string;
+  managerName: string;
+  status: OrgStatus;
+}
+
+/**
+ * `updateTeamSchema` is `teamFields.omit({ departmentId: true }).partial()` —
+ * a team cannot be moved between departments through this endpoint.
+ */
+export interface TeamPatch {
+  code?: string;
+  name?: string;
+  description?: string;
+  managerName?: string;
+  status?: OrgStatus;
+  version: number;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}
+
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}

@@ -1,73 +1,94 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/hr-management/attendance/checkin-explanations/dto/checkin-explanations.dto.ts`.
+ *
+ * The DTO exposes no `attachment_url` and no late-submission / over-quota flags, so the
+ * UI must not render them. Deadline information is stated as text only.
+ */
+export const EXPLANATION_STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] as const;
+export type ExplanationStatus = (typeof EXPLANATION_STATUSES)[number];
 
-export const statusSchema = z.enum([
-  "PENDING",
-  "APPROVED",
-  "REJECTED",
-  "CANCELLED",
-]);
-export const typeSchema = z.enum([
+export const EXPLANATION_TYPES = [
   "FORGOT_CHECKIN",
   "MISSED_CHECKOUT",
   "WRONG_TIME",
   "OTHER",
-]);
+] as const;
+export type ExplanationType = (typeof EXPLANATION_TYPES)[number];
 
-const clockTime = z
-  .string()
-  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Giờ phải có dạng HH:mm");
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+export interface Explanation {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  /** YYYY-MM-DD. */
+  workDate: string;
+  type: ExplanationType;
+  reason: string;
+  /** "" when the employee did not propose a new clock-in time. */
+  requestedCheckIn: string;
+  requestedCheckOut: string;
+  status: ExplanationStatus;
+  decidedBy: string;
+  decidedAt: string | null;
+  decisionNote: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const explanationInput = z
-  .object({
-    employeeId: z.string().trim().min(1, "Nhập mã nhân sự").max(64),
-    employeeName: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-    workDate: dateKey,
-    type: typeSchema.default("FORGOT_CHECKIN"),
-    reason: z
-      .string()
-      .trim()
-      .min(10, "Giải trình cần ít nhất 10 ký tự")
-      .max(1000),
-    requestedCheckIn: clockTime.or(z.literal("")).default(""),
-    requestedCheckOut: clockTime.or(z.literal("")).default(""),
-    status: statusSchema.default("PENDING"),
-    decidedBy: z.string().max(200).default(""),
-    decidedAt: z.iso.datetime().nullable().default(null),
-    decisionNote: z.string().max(500).default(""),
-  })
-  .strict();
+export interface ExplanationInput {
+  employeeId: string;
+  employeeName: string;
+  workDate: string;
+  type: ExplanationType;
+  reason: string;
+  requestedCheckIn: string;
+  requestedCheckOut: string;
+}
 
-export const explanationSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    workDate: z.string(),
-    type: typeSchema,
-    reason: z.string(),
-    requestedCheckIn: z.string(),
-    requestedCheckOut: z.string(),
-    status: statusSchema,
-    decidedBy: z.string(),
-    decidedAt: z.iso.datetime().nullable(),
-    decisionNote: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+/** Only a pending request may be edited; the server enforces the same rule. */
+export interface ExplanationPatch {
+  reason?: string;
+  type?: ExplanationType;
+  requestedCheckIn?: string;
+  requestedCheckOut?: string;
+  version: number;
+}
 
-export const listSchema = z.object({
-  items: z.array(explanationSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface DecisionInput {
+  status: "APPROVED" | "REJECTED";
+  note: string;
+  version: number;
+}
 
-export type Status = z.infer<typeof statusSchema>;
-export type ExplanationType = z.infer<typeof typeSchema>;
-export type ExplanationDto = z.infer<typeof explanationSchema>;
-export type ExplanationInput = z.input<typeof explanationInput>;
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Shape of `GET /auth/session`. */
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+  };
+}
+
+/** Shape of `GET /permissions/me`. */
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}

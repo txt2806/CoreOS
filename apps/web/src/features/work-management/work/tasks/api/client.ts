@@ -1,56 +1,170 @@
-import { z } from "zod";
-import {
-  createSchema,
-  recordSchema,
-  type RecordDto,
-  type RecordInput,
-  type TaskUpdate,
-} from "@/features/work-management/work/tasks/types";
-import { apiRequest } from "@/features/work-management/work/tasks/api/http";
+import type {
+  AllowedEntry,
+  AllowedMove,
+  PageResult,
+  PermissionSnapshot,
+  Task,
+  TaskInput,
+  TaskState,
+  TaskStatus,
+} from "../types";
 
-const pageSchema = z
-  .object({
-    items: z.array(recordSchema),
-    total: z.number(),
-    page: z.number(),
-    pageSize: z.number(),
-  })
-  .strict();
+/**
+ * Every call goes through the same-origin proxy, so the HttpOnly session cookie
+ * travels with the request and no CORS preflight is involved.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
 
-export const client = {
-  async list(signal?: AbortSignal) {
-    const items: RecordDto[] = [];
-    let page = 1;
-    while (true) {
-      const result = await apiRequest(
-        "/tasks?page=" + page + "&pageSize=100",
-        { signal },
-        pageSchema,
-      );
-      items.push(...result.items);
-      if (items.length >= result.total || !result.items.length) return items;
-      page++;
-    }
-  },
-  get: (id: string) => apiRequest(`/tasks/${id}`, {}, recordSchema),
-  create: (data: RecordInput) =>
-    apiRequest(
-      "/tasks",
-      { method: "POST", body: JSON.stringify(createSchema.parse(data)) },
-      recordSchema,
-    ),
-  update: (record: RecordDto, patch: TaskUpdate) =>
-    apiRequest(
-      "/tasks/" + record.id,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ ...patch, version: record.version }),
+  constructor(
+    status: number,
+    message: string,
+    issues: { path: string; message: string }[] = [],
+  ) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
+  }
+}
+
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
       },
-      recordSchema,
-    ),
-  remove: (record: RecordDto) =>
-    apiRequest("/tasks/" + record.id, {
-      method: "DELETE",
-      body: JSON.stringify({ version: record.version }),
-    }),
-};
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.",
+    );
+  }
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
+    );
+  }
+
+  return body as T;
+}
+
+export interface TaskListQuery {
+  page: number;
+  pageSize: number;
+  q?: string;
+  status?: TaskStatus | "";
+}
+
+export function listTasks(query: TaskListQuery) {
+  const search = new URLSearchParams({
+    page: String(query.page),
+    pageSize: String(query.pageSize),
+  });
+  if (query.q?.trim()) search.set("q", query.q.trim());
+  if (query.status) search.set("status", query.status);
+  return request<PageResult<Task>>(`/tasks?${search.toString()}`);
+}
+
+/** One cheap probe per status keeps the metric strip truthful without loading rows. */
+export function taskTotal(status?: TaskStatus) {
+  const search = new URLSearchParams({ page: "1", pageSize: "1" });
+  if (status) search.set("status", status);
+  return request<PageResult<Task>>(`/tasks?${search.toString()}`).then(
+    (result) => result.total,
+  );
+}
+
+export function getTask(id: string) {
+  return request<Task>(`/tasks/${id}`);
+}
+
+export function createTask(input: TaskInput) {
+  return request<Task>("/tasks", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function updateTask(id: string, input: Partial<TaskInput> & { version: number }) {
+  return request<Task>(`/tasks/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteTask(id: string, version: number) {
+  return request<{ id: string }>(`/tasks/${id}`, {
+    method: "DELETE",
+    body: JSON.stringify({ version }),
+  });
+}
+
+/** One call answers every feature cell the actor holds; screens read their own. */
+export interface PermissionsMe {
+  role: PermissionSnapshot["role"];
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+export function permissionsMe() {
+  return request<PermissionsMe>("/permissions/me");
+}
+
+export function actionsOf(body: PermissionsMe, featureKey: string): string[] {
+  return body.items.find((item) => item.featureKey === featureKey)?.actions ?? [];
+}
+
+export function allowedMoves(taskIds: string[]) {
+  if (taskIds.length === 0) return Promise.resolve<AllowedEntry[]>([]);
+  const search = new URLSearchParams({ taskIds: taskIds.join(",") });
+  return request<AllowedEntry[]>(`/task-workflow/allowed?${search.toString()}`);
+}
+
+/** The board asks one question: which columns may this card enter right now? */
+export function allowedMap(taskIds: string[]) {
+  return allowedMoves(taskIds).then((entries) => {
+    const map: Record<string, AllowedMove[]> = {};
+    for (const entry of entries) map[entry.taskId] = entry.allowed;
+    return map;
+  });
+}
+
+export function taskState(taskId: string) {
+  return request<TaskState>(`/task-workflow/tasks/${taskId}/state`);
+}
+
+export function transitionTask(
+  taskId: string,
+  input: { toStatus: string; version: number; reason?: string },
+) {
+  return request<Task>(`/task-workflow/tasks/${taskId}/transitions`, {
+    method: "POST",
+    headers: { "idempotency-key": crypto.randomUUID() },
+    body: JSON.stringify(input),
+  });
+}

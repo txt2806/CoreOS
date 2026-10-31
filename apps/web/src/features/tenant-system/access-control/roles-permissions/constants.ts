@@ -1,92 +1,44 @@
-import type {
-  FeatureGroup,
-  PermissionAction,
-  PermissionRole,
-} from "@/features/tenant-system/access-control/roles-permissions/types";
+import type { FeatureGroup, PermissionAction, PermissionRole } from "./types";
 
-export const roleLabels: Record<PermissionRole, string> = {
-  EMPLOYEE: "Nhân viên",
-  MANAGER: "Quản lý",
-};
-export const roleOrder: readonly PermissionRole[] = ["EMPLOYEE", "MANAGER"];
+/** Exact `SELF_FEATURE` used by `@RequirePermission` in the controller. */
+export const FEATURE_KEY = "tenant-system/access-control/roles-permissions";
 
-/** `manage` is listed last and stays read-only: only system administrators hold it. */
-export const actionLabels: Record<PermissionAction, string> = {
+/** `manage` is never stored in a cell; only a system administrator holds it. */
+export const RESERVED_ACTION: PermissionAction = "manage";
+
+export const PAGE_SIZES = [10, 25, 50];
+export const DEFAULT_PAGE_SIZE = 10;
+
+export const ACTION_LABELS: Record<PermissionAction, string> = {
   view: "Xem",
   create: "Tạo",
   update: "Sửa",
-  delete: "Xóa",
+  delete: "Xoá",
   approve: "Duyệt",
-  manage: "Quản trị",
+  manage: "Quản lý",
 };
-export const assignableActions: readonly PermissionAction[] = [
-  "view",
-  "create",
-  "update",
-  "delete",
-  "approve",
-];
 
-export const groupLabels: Record<FeatureGroup, string> = {
-  "tenant-system": "Hệ thống & quản trị",
-  "work-management": "Công việc",
+export const ROLE_LABELS: Record<PermissionRole, string> = {
+  EMPLOYEE: "Nhân viên",
+  MANAGER: "Quản lý",
+};
+
+export const GROUP_LABELS: Record<FeatureGroup, string> = {
+  "tenant-system": "Hệ thống tenant",
+  "work-management": "Quản lý công việc",
   "hr-management": "Nhân sự",
   crm: "Khách hàng",
 };
-export const groupOrder: readonly FeatureGroup[] = [
+
+export const GROUP_ORDER: FeatureGroup[] = [
   "tenant-system",
   "work-management",
   "hr-management",
   "crm",
 ];
 
-export const messages = {
-  saved: "Đã lưu ma trận quyền.",
-  denied: "Vai trò của bạn không có quyền xem ma trận quyền.",
-  readOnly:
-    "Bạn chỉ xem được ma trận. Chỉ quản trị hệ thống mới sửa được quyền.",
-  load: "Không tải được ma trận quyền",
-  save: "Không lưu được ma trận quyền",
-  empty: "Chưa có chức năng nào trong danh mục quyền.",
-  history: "Chưa có thay đổi quyền nào được ghi.",
-  noChange: "Chưa có thay đổi nào cần lưu.",
-};
+/** `GET /permissions/history` returns the 50 most recent changes. */
+export const HISTORY_LIMIT_NOTE = "Lịch sử hiển thị 50 thay đổi gần nhất do máy chủ trả về.";
 
-export const definition = {
-  id: "tenant-system/roles-permissions",
-  icon: 9,
-  label: "Phân quyền",
-  title: "Ma trận quyền theo chức năng",
-  singular: "quyền",
-  dateLabel: "Cập nhật",
-  personLabel: "Người thực hiện",
-  tabs: [],
-  sections: [],
-  statuses: [],
-  fields: [],
-  navigation: {
-    title: "Phân quyền",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      { label: "Tất cả", href: "/tenant-system/roles-permissions" },
-      {
-        label: "Hệ thống",
-        href: "/tenant-system/roles-permissions?group=tenant-system&section=Hệ thống",
-      },
-      {
-        label: "Công việc",
-        href: "/tenant-system/roles-permissions?group=work-management&section=Công việc",
-      },
-      {
-        label: "Nhân sự",
-        href: "/tenant-system/roles-permissions?group=hr-management&section=Nhân sự",
-      },
-      {
-        label: "Khách hàng",
-        href: "/tenant-system/roles-permissions?group=crm&section=Khách hàng",
-      },
-    ],
-  },
-} as const;
+export const SYSTEM_ADMIN_NOTE =
+  "Quản trị hệ thống luôn có đủ mọi quyền và không nằm trong ma trận này. Mỗi thao tác của họ được ghi nhật ký như một ghi đè ngoài phạm vi (out-of-scope override).";

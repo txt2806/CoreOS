@@ -1,34 +1,33 @@
-export const statusLabels = {
+import type { PresenceStatus } from "./types";
+
+/** Permission catalog key owned by this branch — matches `@RequirePermission`. */
+export const FEATURE_KEY = "hr-management/attendance/workforce-board";
+
+export const PAGE_SIZES = [20, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 50;
+
+export const STATUS_LABEL: Record<PresenceStatus, string> = {
   IN_OFFICE: "Tại văn phòng",
   REMOTE: "Làm từ xa",
-  LEAVE: "Nghỉ phép",
   OFF_SITE: "Công tác ngoài",
-} as const;
+  LEAVE: "Đang nghỉ phép",
+};
 
-export const statusTones = {
-  IN_OFFICE: "success",
-  REMOTE: "info",
-  LEAVE: "warning",
-  OFF_SITE: "neutral",
-} as const;
+export const STATUS_TONE: Record<PresenceStatus, string> = {
+  IN_OFFICE: "badge badge-success",
+  REMOTE: "badge badge-info",
+  OFF_SITE: "badge badge-accent",
+  LEAVE: "badge badge-warning",
+};
 
-export const definition = {
-  id: "hr-management/workforce",
-  icon: 1,
-  label: "Bảng lực lượng",
-  title: "Bảng lực lượng",
-  singular: "lượt hiện diện",
-  dateLabel: "Ngày",
-  personLabel: "Nhân sự",
-  tabs: [],
-  sections: [],
-  statuses: ["IN_OFFICE", "REMOTE", "LEAVE", "OFF_SITE"],
-  fields: [],
-  navigation: {
-    title: "Bảng lực lượng",
-    collapsed: false,
-    defaultSection: "Hiện diện",
-    allSection: "Hiện diện",
-    items: [{ label: "Hiện diện", href: "/hr-management/workforce" }],
-  },
-} as const;
+export const STATUS_HINT: Record<PresenceStatus, string> = {
+  IN_OFFICE: "Có mặt tại văn phòng theo ca đã khai báo",
+  REMOTE: "Làm việc từ xa, không cần gửi đơn giải trình",
+  OFF_SITE: "Đang công tác ngoài văn phòng",
+  LEAVE: "Đang nghỉ theo đơn đã duyệt",
+};
+
+/** Board order: the places people are working from first, leave last. */
+export const BOARD_ORDER: PresenceStatus[] = ["IN_OFFICE", "REMOTE", "OFF_SITE", "LEAVE"];
+
+export const EXPORT_FILE_PREFIX = "hien-dien";

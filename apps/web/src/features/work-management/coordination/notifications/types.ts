@@ -1,35 +1,31 @@
-import { z } from "zod";
+/** Mirrors `apps/api/src/features/work-management/coordination/notifications/dto/notifications.dto.ts`. */
+export const NOTIFICATION_SOURCES = ["task", "comment", "message", "meeting", "request"] as const;
 
-const recipient = z.string().trim().min(1).max(150);
+export type NotificationSource = (typeof NOTIFICATION_SOURCES)[number];
 
-export const listQuery = z
-  .object({
-    recipient,
-    unread: z
-      .enum(["true", "false"])
-      .transform((value) => value === "true")
-      .optional(),
-    page: z.coerce.number().int().min(1).max(100000).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
+export interface NotificationItem {
+  id: string;
+  recipient: string;
+  source: NotificationSource;
+  title: string;
+  body: string;
+  link: string;
+  sourceId: string | null;
+  readAt: string | null;
+  deletedAt: string | null;
+  createdAt: string;
+}
 
-export const streamQuery = z.object({ recipient }).strict();
+/** The list response also carries the recipient-wide unread count. */
+export interface NotificationPage {
+  items: NotificationItem[];
+  total: number;
+  unread: number;
+  page: number;
+  pageSize: number;
+}
 
-export const readAllSchema = z.object({ recipient }).strict();
-
-export const recordSchema = z.object({
-  id: z.uuid(),
-  recipient,
-  source: z.enum(["task", "comment", "message", "meeting", "request"]),
-  title: z.string().trim().min(1).max(500),
-  body: z.string().trim().max(2000).default(""),
-  link: z.string().trim().min(1).max(500),
-  sourceId: z.uuid().nullable().default(null),
-  readAt: z.iso.datetime().nullable(),
-  deletedAt: z.iso.datetime().nullable().default(null),
-  createdAt: z.iso.datetime(),
-});
-
-export type RecordDto = z.infer<typeof recordSchema>;
-export type ListQuery = z.infer<typeof listQuery>;
+/** Only the fields this screen reads from `GET /auth/session`. */
+export interface SessionView {
+  actor: { employeeId: string; displayName: string };
+}

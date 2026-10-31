@@ -1,30 +1,42 @@
-import type { Metadata } from "next";
-import localFont from "next/font/local";
-import { ApplicationProviders } from "@/core/context/providers";
+import type { Metadata, Viewport } from "next";
+import type { ReactNode } from "react";
+import "./globals.css";
+import { ThemeProvider } from "@/core/context/theme-provider";
+import { ToastProvider } from "@/core/context/toast-provider";
 import { AppShell } from "@/core/layout/app-shell";
 
-import "@/core/ui/styles/globals.css";
-
-const inter = localFont({
-  src: "../../public/assets/Inter-VariableFont_slnt,wght.7385e8d9d3c5518f.ttf",
-  variable: "--font-inter",
-  display: "swap",
-  weight: "100 900",
-});
 export const metadata: Metadata = {
-  title: { default: "OneOps · Trang chủ", template: "%s · OneOps" },
-  description: "Không gian quản lý công việc, dự án và cộng tác đội nhóm",
-  robots: { index: false, follow: false },
+  title: {
+    default: "OneOps — Điều hành công việc, nhân sự và dự án",
+    template: "%s · OneOps",
+  },
+  description:
+    "Hệ thống nội bộ quản lý điểm danh, công việc Kanban và dự án Agile cho doanh nghiệp.",
+  applicationName: "OneOps",
 };
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f6f8fb" },
+    { media: "(prefers-color-scheme: dark)", color: "#0d1522" },
+  ],
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="vi" className={inter.variable}>
+    <html lang="vi" data-theme="light" data-density="comfortable" suppressHydrationWarning>
       <body>
-        <ApplicationProviders>
-          <AppShell>{children}</AppShell>
-        </ApplicationProviders>
+        <ThemeProvider>
+          <ToastProvider>
+            <a className="skip-link" href="#oneops-main">
+              Bỏ qua điều hướng, tới nội dung chính
+            </a>
+            <AppShell>{children}</AppShell>
+          </ToastProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

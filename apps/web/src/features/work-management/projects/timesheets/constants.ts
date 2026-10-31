@@ -1,133 +1,50 @@
-import type {
-  PeriodStatus,
-  TimeEntry,
-} from "@/features/work-management/projects/timesheets/types";
-import {
-  DAY_THRESHOLD_MINUTES,
-  EDITABLE_STATUSES,
-} from "@/features/work-management/projects/timesheets/types";
+import type { PeriodStatus } from "./types";
 
-type Field = {
-  key: string;
-  label: string;
-  type: string;
-  options?: readonly string[];
-};
+/**
+ * Exact key the backend guards with `@RequirePermission` in
+ * `timesheets/timesheets.controller.ts`. Only the GETs carry the guard; writes are
+ * scoped by ownership and period status, which the screen mirrors.
+ */
+export const FEATURE_KEY = "work-management/projects/timesheets";
 
-export const statusLabel: Record<PeriodStatus, string> = {
+export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 25;
+
+export const PERIOD_STATUS_LABEL: Record<PeriodStatus, string> = {
   OPEN: "Đang mở",
   SUBMITTED: "Chờ duyệt",
   APPROVED: "Đã duyệt",
-  REJECTED: "Bị từ chối",
+  REJECTED: "Bị trả lại",
 };
 
-export const definition = {
-  id: "work-management/timesheets",
-  icon: 5,
-  label: "Timesheet",
-  title: "Timesheet",
-  singular: "tuần công",
-  dateLabel: "Tuần",
-  personLabel: "Nhân sự",
-  tabs: [],
-  sections: [],
-  statuses: Object.values(statusLabel),
-  fields: [
-    {
-      key: "weekStart",
-      label: "Tuần bắt đầu",
-      type: "date",
-    },
-    {
-      key: "note",
-      label: "Ghi chú",
-      type: "text",
-    },
-  ],
-  navigation: {
-    title: "Timesheet",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      {
-        label: "Tất cả",
-        href: "/work-management/timesheets",
-      },
-      ...(Object.entries(statusLabel) as [PeriodStatus, string][]).map(
-        ([value, label]) => ({
-          label,
-          href: `/work-management/timesheets?status=${value}&section=${label}`,
-        }),
-      ),
-    ],
-  },
-} as const;
-
-export const fields: readonly Field[] = definition.fields;
-
-export const statusTone: Record<
-  PeriodStatus,
-  "neutral" | "warning" | "success" | "danger"
-> = {
-  OPEN: "neutral",
-  SUBMITTED: "warning",
-  APPROVED: "success",
-  REJECTED: "danger",
+export const PERIOD_STATUS_TONE: Record<PeriodStatus, string> = {
+  OPEN: "badge badge-info",
+  SUBMITTED: "badge badge-warning",
+  APPROVED: "badge badge-success",
+  REJECTED: "badge badge-danger",
 };
 
-export const isEditable = (status: PeriodStatus) =>
-  EDITABLE_STATUSES.includes(status);
+/** Filter chips follow the DTO enum order so the UI never offers a status the API rejects. */
+export const FILTER_STATUSES: PeriodStatus[] = [
+  "OPEN",
+  "SUBMITTED",
+  "APPROVED",
+  "REJECTED",
+];
 
-/** `450` → `7h30`, `480` → `8h`. */
-export function formatMinutes(total: number) {
-  const sign = total < 0 ? "-" : "";
-  const abs = Math.abs(total);
-  const hours = Math.floor(abs / 60);
-  const minutes = abs % 60;
-  return `${sign}${hours}h${minutes ? String(minutes).padStart(2, "0") : ""}`;
-}
+/**
+ * Rules mirrored from the DTO so the form can refuse a bad entry before the
+ * request; the API remains the authority and repeats every check.
+ */
+export const MINUTE_STEP = 15;
+export const DAY_LIMIT_MINUTES = 720;
+export const DAY_THRESHOLD_MINUTES = 480;
+export const WEEK_THRESHOLD_MINUTES = 2400;
 
-/** Office-time date so the UI and the API agree on "today". */
-export function officeToday() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Ho_Chi_Minh",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
+/** Minutes are chosen from this list so a typed value can never break the 15-minute grid. */
+export const MINUTE_CHOICES: number[] = Array.from(
+  { length: DAY_LIMIT_MINUTES / MINUTE_STEP },
+  (_, index) => (index + 1) * MINUTE_STEP,
+);
 
-export function shiftDate(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00.000Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
-
-/** Monday of the week that contains `date` (ISO week). */
-export function mondayOf(date: string) {
-  const value = new Date(`${date}T00:00:00.000Z`);
-  const weekday = value.getUTCDay() || 7;
-  return shiftDate(date, 1 - weekday);
-}
-
-/** Minutes booked per day; a day above the threshold needs a reason. */
-export function dayTotals(entries: readonly TimeEntry[]) {
-  const totals = new Map<string, number>();
-  for (const entry of entries)
-    totals.set(
-      entry.workDate,
-      (totals.get(entry.workDate) ?? 0) + entry.minutes,
-    );
-  return totals;
-}
-
-export const dayNeedsReason = (minutes: number) =>
-  minutes > DAY_THRESHOLD_MINUTES;
-
-export const formatDay = (date: string) =>
-  new Date(`${date}T00:00:00.000Z`).toLocaleDateString("vi-VN", {
-    weekday: "short",
-    day: "2-digit",
-    month: "2-digit",
-  });
+export const EXPORT_FILE_PREFIX = "timesheet";

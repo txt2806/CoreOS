@@ -1,0 +1,2 @@
+/* Sign-in is `@Public()` in the controller, so this leaf has no server actions.
+   The folder exists because every frontend leaf carries the same shape. */

@@ -1,56 +1,23 @@
-type Field = {
-  key: string;
-  label: string;
-  type: string;
-  options?: readonly string[];
+import type { ReportStatus } from "./types";
+
+/**
+ * Reports share the `workspace-today` permission branch with the daily
+ * workspace and the calendar — the catalog holds a single key for all three.
+ */
+export const FEATURE_KEY = "work-management/coordination/workspace-today";
+
+export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 100;
+
+export const STATUS_TONE: Record<ReportStatus, string> = {
+  "Bản nháp": "badge",
+  "Đã phát hành": "badge badge-success",
 };
-export const definition = {
-  id: "work-management/reports",
-  icon: 9,
-  label: "Báo cáo",
-  title: "Báo cáo công việc",
-  singular: "báo cáo",
-  dateLabel: "Ngày báo cáo",
-  personLabel: "Người phụ trách",
-  tabs: [],
-  sections: [],
-  statuses: ["Bản nháp", "Đã phát hành"],
-  fields: [
-    {
-      key: "period",
-      label: "Kỳ báo cáo",
-      type: "text",
-    },
-    {
-      key: "goal",
-      label: "Mục tiêu",
-      type: "textarea",
-    },
-    {
-      key: "result",
-      label: "Kết quả",
-      type: "textarea",
-    },
-  ],
-  navigation: {
-    title: "Báo cáo",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      {
-        label: "Tất cả",
-        href: "/work-management/reports",
-      },
-      {
-        label: "Bản nháp",
-        href: "/work-management/reports?status=Bản nháp&section=Bản nháp",
-      },
-      {
-        label: "Đã phát hành",
-        href: "/work-management/reports?status=Đã phát hành&section=Đã phát hành",
-      },
-    ],
-  },
-} as const;
-export const fields: readonly Field[] = definition.fields;
+
+/** Titles stay short so the breakdown widgets fit a bento-4 cell. */
+export const STATUS_LABEL: Record<ReportStatus, string> = {
+  "Bản nháp": "Bản nháp",
+  "Đã phát hành": "Đã phát hành",
+};
+
+export const EXPORT_FILE_PREFIX = "bao-cao";

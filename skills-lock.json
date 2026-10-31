@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "accessibility-compliance": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/ui-design/skills/accessibility-compliance/SKILL.md",
+      "computedHash": "689b0c2a2e399bfff0581f0ba3cbefc6c7b5806c6dbc8cb1a172cf055bff0c91"
+    },
+    "design-system-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/ui-design/skills/design-system-patterns/SKILL.md",
+      "computedHash": "b6ba14bf8809ee027a3c4c9e88bdc71626eb7f68604b65dce000519d8e4ad458"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "106acf230014cbb43ca34e6410371321b56ca742f9ee0442e8ec05bf02eb0384"
+    },
+    "interaction-design": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/ui-design/skills/interaction-design/SKILL.md",
+      "computedHash": "d2e2127b91c76b2ed6706ce78bfc7eddcb6b340333f94d3d53d9f65e3253dea2"
+    },
+    "responsive-design": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/ui-design/skills/responsive-design/SKILL.md",
+      "computedHash": "155eff4b1bc8d867ae6bea9900c485ab1081de0b4873c1900adb66bf62466aed"
+    },
+    "visual-design-foundations": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/ui-design/skills/visual-design-foundations/SKILL.md",
+      "computedHash": "2920bece2867b2a39301ee650b17b960c175ac60587af329f4da0e443fc33aae"
+    }
+  }
+}

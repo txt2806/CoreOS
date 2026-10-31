@@ -1,284 +1,466 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type {
-  DecisionStatus,
-  QueueItem,
-} from "@/features/hr-management/leaves/leave-approvals/types";
-import {
-  definition,
-  leaveTypeLabels,
-  statusLabels,
-  statusTones,
-} from "@/features/hr-management/leaves/leave-approvals/constants";
-import {
-  useApprovalHistory,
-  useApprovalQueue,
-} from "@/features/hr-management/leaves/leave-approvals/hooks/use-approvals";
-import { DecisionForm } from "@/features/hr-management/leaves/leave-approvals/components/decision-form";
-import {
-  Badge,
-  Button,
-  ErrorLine,
-  Input,
-  Modal,
-  Select,
-} from "@/features/hr-management/leaves/leave-approvals/components/primitives/ui";
 
-type Tab = "queue" | "history";
+import { useMemo, useState } from "react";
+import { DEFAULT_PAGE_SIZE, DECISION_LABEL, LEAVE_TYPE_LABEL, QUEUE_LIMIT } from "../constants";
+import { daysBetween, downloadCsv, formatDate, number, today } from "../format";
+import { useLeaveApprovals, type Feedback } from "../hooks/use-leave-approvals";
+import { DECISION_STATUSES, type DecisionStatus, type QueueItem } from "../types";
+import { DecisionSheet } from "./decision-sheet";
+import {
+  CloseGlyph,
+  DownloadGlyph,
+  Pagination,
+  SearchGlyph,
+} from "./primitives";
+import {
+  HistoryTable,
+  QueueTable,
+  sortHistory,
+  sortQueue,
+  type HistorySort,
+  type QueueSort,
+} from "./table";
 
-const tabs: { key: Tab; label: string }[] = [
-  { key: "queue", label: "Chờ duyệt" },
-  { key: "history", label: "Lịch sử duyệt" },
-];
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
 
-function QueueTab({ notify }: { notify: (message: string) => void }) {
-  const { items, loading, error, reload } = useApprovalQueue();
-  const [deciding, setDeciding] = useState<{
-    item: QueueItem;
-    decision: DecisionStatus;
-  } | null>(null);
+export function LeaveApprovalsPage() {
+  const approvals = useLeaveApprovals();
+  const [queueSort, setQueueSort] = useState<QueueSort>({ key: "fromDate", dir: "asc" });
+  const [historySort, setHistorySort] = useState<HistorySort>({
+    key: "decidedAt",
+    dir: "desc",
+  });
+  const [queuePage, setQueuePage] = useState(1);
+  const [queueSize, setQueueSize] = useState(DEFAULT_PAGE_SIZE);
+  const [sheet, setSheet] = useState<{ item: QueueItem; mode: DecisionStatus } | null>(null);
+
+  /* The queue endpoint accepts no query string, so its search runs in the browser. */
+  const needle = approvals.term.trim().toLowerCase();
+  const matched = useMemo(() => {
+    const rows = needle
+      ? approvals.queue.filter(
+          (row) =>
+            row.employeeName.toLowerCase().includes(needle) ||
+            row.employeeId.toLowerCase().includes(needle) ||
+            row.reason.toLowerCase().includes(needle),
+        )
+      : approvals.queue;
+    return sortQueue(rows, queueSort);
+  }, [approvals.queue, needle, queueSort]);
+
+  const queuePages = Math.max(1, Math.ceil(matched.length / queueSize));
+  const safeQueuePage = Math.min(queuePage, queuePages);
+  const queueSlice = matched.slice((safeQueuePage - 1) * queueSize, safeQueuePage * queueSize);
+
+  const historyRows = useMemo(
+    () => sortHistory(approvals.history.items, historySort),
+    [approvals.history.items, historySort],
+  );
+
+  const now = today();
+  const urgent = approvals.queue.filter((row) => daysBetween(now, row.fromDate) <= 3).length;
+  const queueDays = approvals.queue.reduce((sum, row) => sum + row.days, 0);
+  const decided = (approvals.counts?.approved ?? 0) + (approvals.counts?.rejected ?? 0);
+
+  const exportQueue = (rows: QueueItem[]) => {
+    const header = [
+      "Mã nhân sự",
+      "Nhân sự",
+      "Loại nghỉ",
+      "Từ ngày",
+      "Đến ngày",
+      "Số ngày",
+      "Ngày gửi",
+      "Lý do",
+    ];
+    const body = rows.map((row) => [
+      row.employeeId,
+      row.employeeName,
+      LEAVE_TYPE_LABEL[row.leaveType],
+      formatDate(row.fromDate),
+      formatDate(row.toDate),
+      String(row.days),
+      formatDate(row.createdAt),
+      row.reason,
+    ]);
+    downloadCsv(`don-cho-duyet-${now}.csv`, [header, ...body]);
+    approvals.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${number(rows.length)} đơn đang chờ duyệt ra tệp CSV.`,
+    });
+  };
+
+  const activeError = approvals.tab === "queue" ? approvals.queueError : approvals.historyError;
+  const activeLoading = approvals.tab === "queue" ? approvals.queueLoading : approvals.historyLoading;
+  const forbidden = activeError?.status === 403;
+  const canApprove = approvals.can("approve");
+
+  const reloadBoth = () => {
+    approvals.reload();
+    setQueuePage(1);
+  };
 
   return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">Đơn đang chờ duyệt</h2>
-        <span className="text-sm text-muted-foreground">
-          {items.length} đơn
-        </span>
-      </div>
-
-      {error && <ErrorLine message={error} retry={reload} />}
-
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải hàng đợi duyệt…
-        </p>
-      ) : !items.length ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h3 className="text-sm font-semibold">Không có đơn chờ duyệt</h3>
-          <p className="text-sm text-muted-foreground">
-            Đơn nghỉ phép mới gửi từ trang Đơn của tôi sẽ xuất hiện tại đây.
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Nhân sự · Nghỉ phép</p>
+          <h1>Duyệt đơn nghỉ phép</h1>
+          <p className="page-lede">
+            Hàng đợi đơn đang chờ quyết định, kèm ảnh hưởng hạn mức phép năm của từng nhân sự.
+            Từ chối bắt buộc ghi lý do để nhân sự biết cách xử lý.
           </p>
         </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((item) => (
-            <li
-              key={item.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-surface p-3"
-            >
-              <div className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  {item.employeeName}{" "}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {item.employeeId}
-                  </span>
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {leaveTypeLabels[item.leaveType]} · {item.fromDate} →{" "}
-                  {item.toDate} · {item.days} ngày làm việc
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {item.reason}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => setDeciding({ item, decision: "APPROVED" })}
-                >
-                  Duyệt
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setDeciding({ item, decision: "REJECTED" })}
-                >
-                  Từ chối
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {deciding && (
-        <Modal
-          title={
-            deciding.decision === "APPROVED"
-              ? "Duyệt đơn nghỉ phép"
-              : "Từ chối đơn nghỉ phép"
-          }
-          onClose={() => setDeciding(null)}
-        >
-          <DecisionForm
-            item={deciding.item}
-            decision={deciding.decision}
-            notify={notify}
-            onClose={() => setDeciding(null)}
-          />
-        </Modal>
-      )}
-    </>
-  );
-}
-
-function HistoryTab() {
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<DecisionStatus | "">("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-
-  const filters: Record<string, string> = {};
-  if (query.trim()) filters.q = query.trim();
-  if (status) filters.status = status;
-  if (from) filters.from = from;
-  if (to) filters.to = to;
-  const { items, total, loading, error, reload } = useApprovalHistory(filters);
-
-  return (
-    <>
-      <div className="flex flex-wrap items-end gap-2">
-        <Input
-          aria-label="Tìm lịch sử duyệt"
-          placeholder="Tìm theo nhân sự hoặc người duyệt…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          className="sm:w-56"
-        />
-        <Select
-          aria-label="Lọc kết quả duyệt"
-          value={status}
-          onChange={(event) =>
-            setStatus(event.target.value as DecisionStatus | "")
-          }
-        >
-          <option value="">Tất cả kết quả</option>
-          {Object.entries(statusLabels).map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </Select>
-        <Input
-          type="date"
-          aria-label="Từ ngày"
-          value={from}
-          onChange={(event) => setFrom(event.target.value)}
-        />
-        <Input
-          type="date"
-          aria-label="Đến ngày"
-          value={to}
-          onChange={(event) => setTo(event.target.value)}
-        />
-        <span className="text-sm text-muted-foreground">
-          {items.length}/{total} quyết định
-        </span>
-      </div>
-
-      {error && <ErrorLine message={error} retry={reload} />}
-
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải lịch sử duyệt…
-        </p>
-      ) : !items.length ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h3 className="text-sm font-semibold">
-            {total ? "Không có quyết định phù hợp" : "Chưa có lịch sử duyệt"}
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            {total
-              ? "Đổi bộ lọc hoặc khoảng ngày để xem lại."
-              : "Kết quả duyệt hoặc từ chối đơn nghỉ phép được lưu tại đây."}
-          </p>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((record) => (
-            <li
-              key={record.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-surface p-3"
-            >
-              <div className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  {record.employeeName}{" "}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {record.employeeId}
-                  </span>
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {leaveTypeLabels[record.leaveType]} · {record.fromDate} →{" "}
-                  {record.toDate} · {record.days} ngày làm việc
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {record.decidedBy} xử lý ngày {record.decidedAt.slice(0, 10)}
-                  {record.decisionNote ? ` · ${record.decisionNote}` : ""}
-                </span>
-              </div>
-              <Badge tone={statusTones[record.status]}>
-                {statusLabels[record.status]}
-              </Badge>
-            </li>
-          ))}
-        </ul>
-      )}
-    </>
-  );
-}
-
-export function ModulePage() {
-  const params = useSearchParams();
-  const tab: Tab = params.get("tab") === "history" ? "history" : "queue";
-  const [message, setMessage] = useState("");
-
-  function notify(text: string) {
-    setMessage(text);
-    window.setTimeout(() => setMessage(""), 5000);
-  }
-
-  return (
-    <div className="module-view">
-      <section className="records-panel">
-        <div className="page-header">
-          <div>
-            <span className="eyebrow">Nhân sự · Duyệt nghỉ</span>
-            <h1>{definition.title}</h1>
-            <p>
-              Duyệt hoặc từ chối đơn nghỉ phép đang chờ và tra cứu lịch sử quyết
-              định. Kết quả duyệt được lưu cùng người xử lý và thời điểm.
-            </p>
-          </div>
-        </div>
-        <nav aria-label="Nhóm duyệt nghỉ phép" className="flex flex-wrap gap-2">
-          {tabs.map((item) => (
-            <a
-              key={item.key}
-              href={`?tab=${item.key}&section=${encodeURIComponent(item.label)}`}
-              aria-current={tab === item.key ? "page" : undefined}
-              className={`rounded-control border px-3 py-1.5 text-sm ${
-                tab === item.key
-                  ? "border-primary bg-accent text-accent-foreground"
-                  : "border-border bg-surface text-muted-foreground"
-              }`}
-            >
-              {item.label}
-            </a>
-          ))}
-        </nav>
-        {tab === "queue" ? <QueueTab notify={notify} /> : <HistoryTab />}
-      </section>
-
-      {message && (
-        <div className="toast" role="status">
-          {message}
-          <button aria-label="Đóng thông báo" onClick={() => setMessage("")}>
-            ×
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={reloadBoth}
+            disabled={activeLoading}
+            title="Tải lại hàng đợi và lịch sử quyết định"
+          >
+            Tải lại
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => exportQueue(matched)}
+            disabled={matched.length === 0}
+            title="Xuất các đơn đang chờ duyệt ra CSV"
+          >
+            <DownloadGlyph /> Xuất CSV
           </button>
         </div>
-      )}
+      </header>
+
+      <section className="metric-strip" aria-label="Tình hình duyệt nghỉ phép">
+        <div className="metric">
+          <span className="metric-value tabular">{number(approvals.queueTotal)}</span>
+          <span className="metric-label">Đơn chờ duyệt</span>
+          <span className="metric-note">
+            {urgent > 0 ? `${number(urgent)} đơn bắt đầu trong 3 ngày tới` : "không có đơn gấp"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{number(queueDays)}</span>
+          <span className="metric-label">Ngày đang chờ</span>
+          <span className="metric-note">cần cân đối với hạn mức phép năm</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{number(approvals.counts?.approved ?? 0)}</span>
+          <span className="metric-label">Đã duyệt</span>
+          <span className="metric-note">
+            {decided > 0
+              ? `${Math.round(((approvals.counts?.approved ?? 0) / decided) * 100)}% trên tổng quyết định`
+              : "chưa có dữ liệu"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{number(approvals.counts?.rejected ?? 0)}</span>
+          <span className="metric-label">Đã từ chối</span>
+          <span className="metric-note">bị từ chối sau ngày nghỉ là nghỉ không phép</span>
+        </div>
+      </section>
+
+      {approvals.feedback ? (
+        <div className={ALERT_TONE[approvals.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{approvals.feedback.message}</span>
+            {approvals.feedback.hint ? (
+              <span className="muted">{approvals.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => approvals.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="segmented" role="group" aria-label="Chọn danh sách hiển thị">
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={approvals.tab === "queue"}
+                  onClick={() => approvals.setTab("queue")}
+                >
+                  Hàng đợi ({number(approvals.queueTotal)})
+                </button>
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={approvals.tab === "history"}
+                  onClick={() => approvals.setTab("history")}
+                >
+                  Lịch sử quyết định
+                </button>
+              </div>
+
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="approval-search"
+                  className="input"
+                  type="search"
+                  value={approvals.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo tên, mã nhân sự hoặc lý do…"
+                  aria-label="Tìm đơn nghỉ phép"
+                  onChange={(event) =>
+                    approvals.patchQuery({ q: event.target.value, page: 1 })
+                  }
+                />
+                {approvals.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => approvals.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              {approvals.tab === "history" ? (
+                <select
+                  className="select"
+                  value={approvals.query.status ?? ""}
+                  aria-label="Lọc theo quyết định"
+                  onChange={(event) =>
+                    approvals.patchQuery({
+                      status: event.target.value as DecisionStatus | "",
+                      page: 1,
+                    })
+                  }
+                  style={{ width: 172 }}
+                >
+                  <option value="">Mọi quyết định</option>
+                  {DECISION_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {DECISION_LABEL[status]}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {approvals.tab === "queue"
+                  ? `${number(matched.length)}/${number(approvals.queueTotal)} đơn`
+                  : `${number(approvals.history.total)} quyết định`}
+                {approvals.filtersActive ? " · đang lọc" : ""}
+              </span>
+            </div>
+          </div>
+
+          {approvals.filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {approvals.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{approvals.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => approvals.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {approvals.query.status ? (
+                <span className="chip" data-active="true">
+                  Quyết định: {DECISION_LABEL[approvals.query.status]}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => approvals.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc quyết định"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={approvals.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="status">
+            <h2 className="empty-title">Bạn không có quyền duyệt đơn nghỉ phép</h2>
+            <p className="empty-body">
+              Màn hình này cần quyền xem và duyệt trên phân hệ Duyệt nghỉ phép. Liên hệ quản trị
+              viên nếu bạn cần được cấp quyền.
+            </p>
+            <div className="row items-center gap-2">
+              <button type="button" className="btn btn-ghost" onClick={approvals.reload}>
+                Thử lại
+              </button>
+            </div>
+          </div>
+        ) : activeError ? (
+          <div className="error-state" role="alert">
+            <h2 className="empty-title">Không tải được dữ liệu</h2>
+            <p className="empty-body">{activeError.message}</p>
+            <div className="row items-center gap-2">
+              <button type="button" className="btn btn-primary" onClick={approvals.reload}>
+                Thử lại
+              </button>
+            </div>
+          </div>
+        ) : approvals.tab === "queue" ? (
+          <>
+            {!activeLoading && matched.length === 0 ? (
+              approvals.queueTotal === 0 ? (
+                <div className="empty-state">
+                  <h2 className="empty-title">Không còn đơn nào chờ duyệt</h2>
+                  <p className="empty-body">
+                    Mọi đơn nghỉ phép đã được xử lý. Lịch sử quyết định vẫn lưu lại để tra cứu sau.
+                  </p>
+                  <div className="row items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => approvals.setTab("history")}
+                    >
+                      Xem lịch sử quyết định
+                    </button>
+                    <button type="button" className="btn btn-ghost" onClick={approvals.reload}>
+                      Tải lại
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <h2 className="empty-title">Không có đơn nào khớp bộ lọc</h2>
+                  <p className="empty-body">
+                    Hàng đợi đang có {number(approvals.queueTotal)} đơn nhưng không đơn nào khớp từ
+                    khoá “{approvals.term}”.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => approvals.patchQuery({ q: "", page: 1 })}
+                  >
+                    Xoá từ khoá
+                  </button>
+                </div>
+              )
+            ) : (
+              <>
+                <QueueTable
+                  rows={queueSlice}
+                  loading={activeLoading}
+                  canApprove={canApprove}
+                  pendingId={approvals.pendingId}
+                  sort={queueSort}
+                  onSort={setQueueSort}
+                  onOpen={(item) => setSheet({ item, mode: "APPROVED" })}
+                  onApprove={(item) => {
+                    void approvals.decide(item, "APPROVED", "");
+                  }}
+                  onReject={(item) => setSheet({ item, mode: "REJECTED" })}
+                />
+                <div aria-live="polite" className="sr-only">
+                  {approvals.pendingId ? "Đang ghi quyết định cho đơn đã chọn." : ""}
+                </div>
+                <Pagination
+                  page={safeQueuePage}
+                  pageSize={queueSize}
+                  total={matched.length}
+                  onPage={setQueuePage}
+                  onPageSize={(size) => {
+                    setQueueSize(size);
+                    setQueuePage(1);
+                  }}
+                  idPrefix="approval-queue"
+                />
+              </>
+            )}
+          </>
+        ) : !activeLoading && historyRows.length === 0 ? (
+          <div className="empty-state">
+            <h2 className="empty-title">
+              {approvals.filtersActive ? "Không có quyết định nào khớp bộ lọc" : "Chưa có quyết định nào"}
+            </h2>
+            <p className="empty-body">
+              {approvals.filtersActive
+                ? "Bỏ bộ lọc để xem toàn bộ lịch sử duyệt nghỉ phép."
+                : "Khi bạn duyệt hoặc từ chối một đơn, quyết định sẽ được lưu tại đây kèm người duyệt và ghi chú."}
+            </p>
+            <div className="row items-center gap-2">
+              {approvals.filtersActive ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={approvals.clearFilters}
+                >
+                  Xoá bộ lọc
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => approvals.setTab("queue")}
+                >
+                  Về hàng đợi chờ duyệt
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <HistoryTable rows={historyRows} loading={activeLoading} sort={historySort} onSort={setHistorySort} />
+            <Pagination
+              page={approvals.history.page}
+              pageSize={approvals.history.pageSize}
+              total={approvals.history.total}
+              onPage={(page) => approvals.patchQuery({ page })}
+              onPageSize={(size) => approvals.patchQuery({ pageSize: size, page: 1 })}
+              idPrefix="approval-history"
+            />
+          </>
+        )}
+      </div>
+
+      <p className="page-footnote">
+        Hàng đợi lấy tối đa {number(QUEUE_LIMIT)} đơn chờ duyệt gần nhất theo ngày nghỉ nên được phân
+        trang tại trình duyệt; lịch sử quyết định phân trang từ máy chủ. Quyết định được ghi ngay khi
+        bấm, đơn bị từ chối sau ngày nghỉ được tính là nghỉ không phép.
+      </p>
+
+      {sheet ? (
+        <DecisionSheet
+          item={sheet.item}
+          initialMode={sheet.mode}
+          canApprove={canApprove}
+          pending={approvals.pendingId === sheet.item.id}
+          quota={approvals.quota}
+          quotaProblem={approvals.quotaProblem}
+          usedDaysOf={approvals.usedDaysOf}
+          onDecide={(status, note) => approvals.decide(sheet.item, status, note)}
+          onClose={() => setSheet(null)}
+        />
+      ) : null}
     </div>
   );
 }

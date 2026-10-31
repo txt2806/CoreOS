@@ -1,59 +1,97 @@
-import { z } from "zod";
-export const statusSchema = z.enum(["ACTIVE", "INACTIVE"]);
-const emailField = z
-  .string()
-  .trim()
-  .max(200)
-  .refine(
-    (value) => value === "" || z.email().safeParse(value).success,
-    "Email không hợp lệ",
-  );
-// Patch gửi lên phải không có default: Zod giữ default qua `.partial()` nên field
-// bị bỏ trống sẽ bị ghi đè về giá trị mặc định.
-const employeeFields = {
-  code: z.string().trim().min(1, "Nhập mã nhân viên").max(50),
-  fullName: z.string().trim().min(1, "Nhập họ tên").max(200),
-  email: emailField,
-  phone: z.string().trim().max(40),
-  jobTitle: z.string().trim().max(150),
-  departmentName: z.string().trim().max(200),
-  teamName: z.string().trim().max(200),
-  managerName: z.string().trim().max(150),
-  startDate: z.iso.date("Ngày vào làm không hợp lệ").nullish(),
-  status: statusSchema,
-  note: z.string().trim().max(2000),
-};
-export const employeeInput = z
-  .object({
-    ...employeeFields,
-    email: employeeFields.email.default(""),
-    phone: employeeFields.phone.default(""),
-    jobTitle: employeeFields.jobTitle.default(""),
-    departmentName: employeeFields.departmentName.default(""),
-    teamName: employeeFields.teamName.default(""),
-    managerName: employeeFields.managerName.default(""),
-    status: employeeFields.status.default("ACTIVE"),
-    note: employeeFields.note.default(""),
-  })
-  .strict();
-export const employeePatch = z.object(employeeFields).partial();
-export const employeeSchema = z
-  .object({
-    ...employeeFields,
-    id: z.uuid(),
-    startDate: z.iso.date().nullable(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export const listSchema = z.object({
-  items: z.array(employeeSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
-export type Status = z.infer<typeof statusSchema>;
-export type EmployeeInput = z.input<typeof employeeInput>;
-export type EmployeeDto = z.infer<typeof employeeSchema>;
-export type EmployeeList = z.infer<typeof listSchema>;
+/**
+ * Mirrors `apps/api/src/features/hr-management/employees/employee-directory/
+ * dto/employee-directory.dto.ts` field for field.
+ *
+ * The directory deliberately carries no credential material and no system role:
+ * `jobTitle` is a free-text attribute, and the only roles in the product are
+ * EMPLOYEE and MANAGER.
+ */
+export const EMPLOYEE_STATUSES = ["ACTIVE", "INACTIVE"] as const;
+export type EmployeeStatus = (typeof EMPLOYEE_STATUSES)[number];
+
+export interface Employee {
+  id: string;
+  code: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  jobTitle: string;
+  departmentName: string;
+  teamName: string;
+  managerName: string;
+  startDate: string | null;
+  status: EmployeeStatus;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `createEmployeeSchema` defaults every field except code and fullName. */
+export interface EmployeeInput {
+  code: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  jobTitle: string;
+  departmentName: string;
+  teamName: string;
+  managerName: string;
+  startDate: string | null;
+  status: EmployeeStatus;
+  note: string;
+}
+
+/** `updateEmployeeSchema` is `.partial()` plus a mandatory `version`. */
+export interface EmployeePatch {
+  code?: string;
+  fullName?: string;
+  email?: string;
+  phone?: string;
+  jobTitle?: string;
+  departmentName?: string;
+  teamName?: string;
+  managerName?: string;
+  startDate?: string | null;
+  status?: EmployeeStatus;
+  note?: string;
+  version: number;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}
+
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+/**
+ * `GET /auth/session`. The directory row itself has no role field, so this is the
+ * only place a role badge can come from — and only for the signed-in actor.
+ */
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+    mustChangePassword: boolean;
+  };
+  idleMinutes: number;
+  expiresAt: string;
+}

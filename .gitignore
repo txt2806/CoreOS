@@ -12,6 +12,7 @@ playwright-report/
 !.env.example
 !**/.env.example
 graphify-out/
+/.qoder
 /.agents
 /.opencode
 Danh sách chức năng.xlsx

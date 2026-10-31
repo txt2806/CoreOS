@@ -1,432 +1,362 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type {
-  InboxEntry,
-  RecordDto,
-} from "@/features/work-management/coordination/tickets-approvals/types";
-import { definition } from "@/features/work-management/coordination/tickets-approvals/constants";
-import { client } from "@/features/work-management/coordination/tickets-approvals/api/client";
-import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/coordination/tickets-approvals/hooks/use-records";
-import {
-  Modal,
-  useWorkspace,
-} from "@/features/work-management/coordination/tickets-approvals/components/primitives/workspace";
-import { Button } from "@/features/work-management/coordination/tickets-approvals/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/work-management/coordination/tickets-approvals/components/primitives/forms";
-import { Badge } from "@/features/work-management/coordination/tickets-approvals/components/primitives/foundations";
-import { RecordForm } from "@/features/work-management/coordination/tickets-approvals/components/record-form";
-import { ApprovalPanel } from "@/features/work-management/coordination/tickets-approvals/components/approval-panel";
-import styles from "@/features/work-management/coordination/tickets-approvals/components/styles.module.css";
 
-export function ModulePage() {
-  const params = useSearchParams();
-  const { openCreate, notify } = useWorkspace();
-  const { records, loading, error, reload } = useModuleRecords();
-  const [query, setQuery] = useState(params.get("q") || "");
-  const [status, setStatus] = useState("");
-  const [detail, setDetail] = useState<RecordDto | null>(null),
-    [editing, setEditing] = useState<RecordDto | null>(null),
-    [deleting, setDeleting] = useState<RecordDto | null>(null),
-    [pending, setPending] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [view, setView] = useState("list");
-  const [inbox, setInbox] = useState<{ items: InboxEntry[]; key: string }>({
-    items: [],
-    key: "",
-  });
-  const [inboxRevision, setInboxRevision] = useState(0);
-  const effectiveStatus =
-    status === "all" ? "" : status || params.get("status") || "";
-  // The inbox is a server filter: only gates the current actor may decide.
-  const inboxKey = view === "inbox" ? `inbox:${inboxRevision}` : "";
-  useEffect(() => {
-    if (!inboxKey) return;
-    const controller = new AbortController();
-    client
-      .inbox(controller.signal)
-      .then((page) => setInbox({ items: page.items, key: inboxKey }))
-      .catch((cause) => {
-        if (controller.signal.aborted) return;
-        setActionError(
-          cause instanceof Error
-            ? cause.message
-            : "Không tải được hộp chờ duyệt.",
-        );
-      });
-    return () => controller.abort();
-  }, [inboxKey]);
-  const inboxLoading = Boolean(inboxKey) && inbox.key !== inboxKey;
-  const inboxItems = inbox.key === inboxKey ? inbox.items : [];
-  const filtered = records.filter(
-    (record) =>
-      (!effectiveStatus || record.status === effectiveStatus) &&
-      `${record.code} ${record.name} ${record.assignee} ${record.note} ${Object.values(record.fields).join(" ")}`
-        .toLocaleLowerCase("vi")
-        .includes(query.trim().toLocaleLowerCase("vi")),
+import { useMemo, useState } from "react";
+import { REQUEST_CATEGORIES } from "../types";
+import type { InboxEntry, RequestCategory } from "../types";
+import { formatDate, money, remainingLabel } from "../format";
+import { useApprovals, type Feedback } from "../hooks/use-approvals";
+import { ReviewSheet } from "./review-sheet";
+import {
+  CloseGlyph,
+  ClockGlyph,
+  Pagination,
+  SearchGlyph,
+  SkeletonLines,
+  SlaBadge,
+  StatusBadge,
+  StepBadge,
+} from "./primitives";
+
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+export function TicketsApprovalsPage() {
+  const approvals = useApprovals();
+  const [term, setTerm] = useState("");
+  const [category, setCategory] = useState<RequestCategory | "">("");
+  const [selected, setSelected] = useState<InboxEntry | null>(null);
+
+  /* The inbox query has no text/category params, so these filters are local. */
+  const visible = useMemo(() => {
+    const needle = term.trim().toLocaleLowerCase("vi");
+    return approvals.items.filter((entry) => {
+      if (category && entry.request.fields.category !== category) return false;
+      if (!needle) return true;
+      return (
+        entry.request.code.toLocaleLowerCase("vi").includes(needle) ||
+        entry.request.name.toLocaleLowerCase("vi").includes(needle) ||
+        (entry.request.fields.requester ?? "").toLocaleLowerCase("vi").includes(needle)
+      );
+    });
+  }, [approvals.items, term, category]);
+
+  const filtersActive = Boolean(term || category);
+  const overdue = approvals.items.filter((entry) => entry.step.sla === "OVERDUE").length;
+  const dueSoon = approvals.items.filter((entry) => entry.step.sla === "DUE_SOON").length;
+  const value = approvals.items.reduce(
+    (sum, entry) => sum + (entry.request.fields.amount ?? 0),
+    0,
   );
-  function exportCsv() {
-    const cell = (value: string) =>
-      '"' +
-      (/^[=+@-]/.test(value) ? "'" : "") +
-      value.replaceAll('"', '""') +
-      '"';
-    const csv = [
-      [
-        "Mã",
-        "Tiêu đề",
-        "Trạng thái",
-        definition.dateLabel,
-        definition.personLabel,
-      ],
-      ...filtered.map((r) => [r.code, r.name, r.status, r.date, r.assignee]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "requests.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+  const forbidden = approvals.error?.status === 403;
+  const canApprove = approvals.can("approve");
+  const total = approvals.data.total;
 
   return (
-    <div className={styles.root}>
-      <div className="module-view">
-        <section className="records-panel">
-          <div className={styles.header}>
-            <div>
-              <h1>{definition.title}</h1>
-              <p>Theo dõi đề xuất và cập nhật kết quả phê duyệt.</p>
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Điều phối công việc</p>
+          <h1>Đề xuất &amp; phê duyệt</h1>
+          <p className="page-lede">
+            Hàng đợi các bước đang chờ bạn quyết định, sắp theo hạn xử lý. Mỗi quyết định
+            ghi kèm ý kiến và đi tiếp quy trình; từ chối bắt buộc có lý do.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={approvals.reload}
+            aria-busy={approvals.loading ? "true" : undefined}
+          >
+            Tải lại hàng đợi
+          </button>
+        </div>
+      </header>
+
+      <section className="metric-strip" aria-label="Tình hình hàng đợi phê duyệt">
+        <div className="metric">
+          <span className="metric-value tabular">{total.toLocaleString("vi-VN")}</span>
+          <span className="metric-label">Bước chờ tôi duyệt</span>
+          <span className="metric-note">theo máy chủ, trước khi lọc trên trang</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{overdue.toLocaleString("vi-VN")}</span>
+          <span className="metric-label">Quá hạn</span>
+          <span className="metric-note">
+            {approvals.items.length
+              ? `${Math.round((overdue / approvals.items.length) * 100)}% trên trang này`
+              : "chưa có dữ liệu"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{dueSoon.toLocaleString("vi-VN")}</span>
+          <span className="metric-label">Sắp tới hạn</span>
+          <span className="metric-note">cần quyết định trong 24 giờ tới</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{money(value)}</span>
+          <span className="metric-label">Giá trị đang chờ</span>
+          <span className="metric-note">tổng số tiền trên trang này</span>
+        </div>
+      </section>
+
+      {approvals.feedback ? (
+        <div className={ALERT_TONE[approvals.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{approvals.feedback.message}</span>
+            {approvals.feedback.hint ? (
+              <span className="muted">{approvals.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => approvals.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="inbox-search"
+                  className="input"
+                  type="search"
+                  value={term}
+                  autoComplete="off"
+                  placeholder="Lọc theo mã, tên, người gửi…"
+                  aria-label="Lọc đề xuất trên trang này"
+                  onChange={(event) => setTerm(event.target.value)}
+                />
+                {term ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => setTerm("")}
+                    aria-label="Xoá từ khoá lọc"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={category}
+                aria-label="Lọc theo loại đề xuất trên trang này"
+                onChange={(event) => setCategory(event.target.value as RequestCategory | "")}
+                style={{ width: 176 }}
+              >
+                <option value="">Mọi loại đề xuất</option>
+                {REQUEST_CATEGORIES.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div className={styles.actions}>
-              <Button variant="secondary" onClick={exportCsv}>
-                Xuất CSV
-              </Button>
-              <Button onClick={openCreate}>Tạo mới</Button>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {total.toLocaleString("vi-VN")} bước chờ · {approvals.items.length} hiển thị
+                {filtersActive ? ` · ${visible.length} dòng khớp` : ""}
+              </span>
             </div>
           </div>
 
-          <div className={styles.toolbar}>
-            <Input
-              aria-label="Tìm kiếm"
-              placeholder={"Tìm " + definition.singular + "…"}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <Select
-              aria-label="Lọc trạng thái"
-              value={effectiveStatus}
-              onChange={(e) => setStatus(e.target.value || "all")}
-            >
-              <option value="">Tất cả trạng thái</option>
-              {definition.statuses.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </Select>
-            <Button
-              variant={view === "list" ? "primary" : "secondary"}
-              onClick={() => setView("list")}
-            >
-              Danh sách
-            </Button>
-            <Button
-              variant={view === "cards" ? "primary" : "secondary"}
-              onClick={() => setView("cards")}
-            >
-              Thẻ
-            </Button>
-            <Button
-              variant={view === "inbox" ? "primary" : "secondary"}
-              onClick={() => setView("inbox")}
-            >
-              Chờ tôi duyệt
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              {filtered.length} mục
-            </span>
-          </div>
-          {(error || actionError) && (
-            <div role="alert" className="error">
-              {error || actionError}
-              <Button variant="ghost" onClick={reload}>
-                Thử lại
-              </Button>
-            </div>
-          )}
-          {view === "inbox" ? (
-            <>
-              <div className={styles.actions}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setInboxRevision((value) => value + 1)}
-                >
-                  Làm mới
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  {inboxItems.length} bước chờ bạn
+          {filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {term ? (
+                <span className="chip" data-active="true">
+                  Lọc: “{term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => setTerm("")}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
                 </span>
-              </div>
-              {inboxLoading ? (
-                <p role="status">Đang tải hộp chờ duyệt…</p>
-              ) : !inboxItems.length ? (
-                <div className={styles.empty}>
-                  <h2>Không có đề xuất nào chờ bạn</h2>
-                  <p>Mọi bước bạn phụ trách đã được xử lý.</p>
-                </div>
-              ) : (
-                <ul className={styles.chain}>
-                  {inboxItems.map((entry) => (
-                    <li key={entry.step.id} className={styles.step}>
-                      <div className={styles.stepHead}>
-                        <div className={styles.stepTitle}>
-                          <strong>
-                            {entry.request.code} · {entry.request.name}
-                          </strong>
-                          <span className="text-sm text-muted-foreground">
-                            {entry.step.name} · SLA {entry.step.slaHours} giờ
-                          </span>
-                        </div>
-                        <Badge
-                          variant={
-                            entry.step.sla === "OVERDUE"
-                              ? "danger"
-                              : entry.step.sla === "DUE_SOON"
-                                ? "warning"
-                                : "neutral"
-                          }
-                        >
-                          {entry.step.remainingMinutes <= 0
-                            ? "Quá hạn"
-                            : `Còn ${Math.ceil(entry.step.remainingMinutes / 60)} giờ`}
-                        </Badge>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => setDetail(entry.request)}
-                        >
-                          Mở
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : loading ? (
-            <p role="status">Đang tải dữ liệu…</p>
-          ) : !filtered.length ? (
-            <div className={styles.empty}>
-              <h2>Chưa có {definition.singular} phù hợp</h2>
-              <p>Tạo nội dung đầu tiên hoặc thay đổi điều kiện tìm kiếm.</p>
-              <Button onClick={openCreate}>Tạo mới</Button>
+              ) : null}
+              {category ? (
+                <span className="chip" data-active="true">
+                  Loại: {category}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => setCategory("")}
+                    aria-label="Bỏ lọc loại đề xuất"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setTerm("");
+                  setCategory("");
+                }}
+              >
+                Xoá bộ lọc
+              </button>
             </div>
-          ) : (
-            <>
-              {view === "list" ? (
-                <div className={styles.scroll}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Mã</th>
-                        <th>Tiêu đề</th>
-                        <th>Trạng thái</th>
-                        <th>{definition.dateLabel}</th>
-                        <th>{definition.personLabel}</th>
-                        <th>Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((record) => (
-                        <tr key={record.id}>
-                          <td>{record.code}</td>
-                          <td>
-                            <button
-                              className="font-medium"
-                              onClick={() => setDetail(record)}
-                            >
-                              {record.name}
-                            </button>
-                          </td>
-                          <td>
-                            <Badge>{record.status}</Badge>
-                          </td>
-                          <td>{record.date}</td>
-                          <td>{record.assignee || "Chưa phân công"}</td>
-                          <td>
-                            <div className={styles.actions}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditing(record)}
-                              >
-                                Sửa
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleting(record)}
-                              >
-                                Xóa
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className={styles.grid}>
-                  {filtered.map((record) => (
-                    <article className={styles.card} key={record.id}>
-                      <div className={styles.meta}>
-                        <span>{record.code}</span>
-                        <Badge>{record.status}</Badge>
-                      </div>
-                      <h3>
-                        <button
-                          type="button"
-                          className={styles.titleLink}
-                          onClick={() => setDetail(record)}
-                        >
-                          {record.name}
-                        </button>
-                      </h3>
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {record.note}
-                      </p>
-                      <div className={styles.meta}>
-                        <span>{record.assignee || "Chưa phân công"}</span>
-                        <span>{record.date}</span>
-                      </div>
-                      <div className={styles.actions}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditing(record)}
-                        >
-                          Sửa
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDeleting(record)}
-                        >
-                          Xóa
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-      {detail && (
-        <Modal title={detail.name} onClose={() => setDetail(null)}>
-          <div className={styles.details}>
-            <Badge>{detail.status}</Badge>
-            <p>
-              <strong>{detail.code}</strong> · {detail.date} ·{" "}
-              {detail.assignee || "Chưa phân công"}
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem hàng đợi phê duyệt</span>
+            <p className="empty-body">
+              Phân hệ Đề xuất &amp; phê duyệt chỉ mở cho người có quyền “Xem”. Yêu cầu quản
+              trị hệ thống cấp quyền rồi tải lại trang.
             </p>
-            <p>{detail.note || "Chưa có mô tả."}</p>
-            {Object.entries(detail.fields)
-              .filter(([, value]) => !Array.isArray(value))
-              .map(([key, value]) => (
-                <p key={key}>
-                  <strong>
-                    {definition.fields.find((field) => field.key === key)
-                      ?.label || key}
-                    :{" "}
-                  </strong>
-                  {String(value)}
-                </p>
-              ))}
-            <ApprovalPanel
-              request={detail}
-              onChanged={(next) => {
-                setDetail(next);
-                // Deciding a step changes the actor's inbox, so refetch it.
-                setInboxRevision((value) => value + 1);
-              }}
-            />
+            <button type="button" className="btn btn-ghost" onClick={approvals.reload}>
+              Tải lại
+            </button>
           </div>
-          <footer>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setEditing(detail);
-                setDetail(null);
-              }}
-            >
-              Chỉnh sửa
-            </Button>
-            <Button onClick={() => setDetail(null)}>Đóng</Button>
-          </footer>
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={"Chỉnh sửa " + definition.singular}
-          onClose={() => setEditing(null)}
-        >
-          <RecordForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {deleting && (
-        <Modal title="Xác nhận xóa" onClose={() => setDeleting(null)}>
-          <div className="form-body">
-            <p>Bạn muốn xóa “{deleting.name}”?</p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
+        ) : approvals.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được hàng đợi phê duyệt</span>
+            <p className="empty-body">{approvals.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={approvals.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : approvals.loading ? (
+          <div className="surface-body">
+            <SkeletonLines rows={5} />
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {filtersActive
+                ? "Không có đề xuất nào khớp bộ lọc"
+                : approvals.items.length === 0 && total > 0
+                  ? "Trang này không còn mục nào chờ bạn"
+                  : "Không có đề xuất nào đang chờ bạn"}
+            </span>
+            <p className="empty-body">
+              {filtersActive
+                ? "Bộ lọc trên trang này không khớp đề xuất nào. Xoá bớt điều kiện để xem cả hàng đợi."
+                : approvals.items.length === 0 && total > 0
+                  ? "Các bước trước đây đã được quyết định. Về trang đầu để xem các bước còn lại theo hạn xử lý."
+                  : "Hàng đợi trống. Khi có đề xuất tới bước của bạn, mục mới sẽ xuất hiện ở đây."}
+            </p>
+            {filtersActive ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  setTerm("");
+                  setCategory("");
+                }}
+              >
+                Xoá bộ lọc
+              </button>
+            ) : approvals.items.length === 0 && total > 0 && approvals.page > 1 ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => approvals.setPage(1)}
+              >
+                Về trang đầu
+              </button>
+            ) : (
+              <button type="button" className="btn btn-ghost" onClick={approvals.reload}>
+                Tải lại hàng đợi
+              </button>
             )}
           </div>
-          <footer>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={pending}
-              onClick={async () => {
-                if (pending) return;
-                setPending(true);
-                setActionError("");
-                try {
-                  await client.remove(deleting);
-                  recordsChanged();
-                  setInboxRevision((value) => value + 1);
-                  setDeleting(null);
-                  notify("Đã xóa thành công.");
-                } catch (e) {
-                  setActionError(
-                    e instanceof Error ? e.message : "Không thể xóa",
-                  );
-                } finally {
-                  setPending(false);
-                }
-              }}
-            >
-              Xóa
-            </Button>
-          </footer>
-        </Modal>
-      )}
+        ) : (
+          <div className="list" aria-label="Đề xuất đang chờ quyết định">
+            {visible.map((entry) => (
+              <button
+                key={entry.request.id}
+                type="button"
+                className="list-row"
+                onClick={() => setSelected(entry)}
+                aria-label={`Mở đề xuất ${entry.request.code} — ${entry.request.name}, bước ${entry.step.position}`}
+              >
+                <span className="list-main">
+                  <span className="row items-center gap-2 wrap">
+                    <span className="mono muted">{entry.request.code}</span>
+                    <StatusBadge status={entry.request.status} />
+                    <StepBadge status={entry.step.status} />
+                  </span>
+                  <strong>{entry.request.name}</strong>
+                  <span className="list-meta">
+                    {entry.request.fields.requester || "Chưa rõ người gửi"} ·{" "}
+                    {entry.request.fields.category ?? "Khác"} ·{" "}
+                    {money(entry.request.fields.amount)} · cần {formatDate(entry.request.date)}
+                  </span>
+                </span>
+
+                <span className="stack gap-1 items-end" style={{ flex: "none" }}>
+                  <span className="row items-center gap-2 wrap">
+                    <span className="muted">
+                      Bước {entry.step.position} · {entry.step.name}
+                    </span>
+                    <SlaBadge sla={entry.step.sla} />
+                  </span>
+                  <span className="row items-center gap-1 muted tabular">
+                    <ClockGlyph />
+                    {remainingLabel(entry.step.remainingMinutes)}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {!forbidden && !approvals.error && total > 0 ? (
+          <Pagination
+            id="inbox"
+            page={approvals.page}
+            pageSize={approvals.pageSize}
+            total={total}
+            onPage={approvals.setPage}
+            onPageSize={approvals.setPageSize}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Hàng đợi do máy chủ lọc theo người duyệt của từng bước; số “bước chờ” là tổng máy
+        chủ trả về nên có thể lớn hơn số dòng hiển thị sau khi loại đề xuất bạn đã bỏ
+        phiếu. Thời gian còn lại tính tại lúc tải trang — tải lại để cập nhật.
+      </p>
+
+      {selected ? (
+        <ReviewSheet
+          entry={selected}
+          pending={approvals.pending === selected.request.id}
+          canApprove={canApprove}
+          onSubmit={(decision, note) => approvals.submit(selected, decision, note)}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
+
+      {!canApprove && !forbidden ? (
+        <p className="muted" role="note">
+          Bạn chỉ xem được hàng đợi: quyền “Duyệt” chưa được cấp cho tài khoản này.
+        </p>
+      ) : null}
     </div>
   );
 }

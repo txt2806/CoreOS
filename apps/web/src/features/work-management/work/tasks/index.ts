@@ -1,5 +1,2 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/work-management/work/tasks/components/entrypoints";
-export { definition } from "@/features/work-management/work/tasks/constants";
+export { TasksPage } from "./components/page";
+export type { Task, TaskInput, TaskStatus } from "./types";

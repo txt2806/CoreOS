@@ -1,2 +1,2 @@
-export { ModulePage } from "@/features/hr-management/leaves/leave-approvals/components/entrypoints";
-export { definition } from "@/features/hr-management/leaves/leave-approvals/constants";
+export { LeaveApprovalsPage } from "./components/page";
+export type { Decision, DecisionInput, DecisionStatus, QueueItem } from "./types";

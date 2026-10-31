@@ -1,473 +1,478 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type {
-  AllocationDto,
-  AllocationStatus,
-  PeriodDto,
-} from "@/features/hr-management/employees/resource-capacity/types";
-import {
-  allocationStatusLabels,
-  allocationStatusTones,
-  definition,
-} from "@/features/hr-management/employees/resource-capacity/constants";
-import { client } from "@/features/hr-management/employees/resource-capacity/api/client";
-import {
-  capacityChanged,
-  useAllocations,
-  usePeriods,
-  useWorkload,
-} from "@/features/hr-management/employees/resource-capacity/hooks/use-capacity";
-import { PeriodForm } from "@/features/hr-management/employees/resource-capacity/components/period-form";
-import { AllocationForm } from "@/features/hr-management/employees/resource-capacity/components/allocation-form";
-import {
-  Badge,
-  Button,
-  ErrorLine,
-  Input,
-  Modal,
-  Select,
-} from "@/features/hr-management/employees/resource-capacity/components/primitives/ui";
 
-type Tab = "periods" | "allocations";
+import { useEffect, useMemo, useState } from "react";
+import { EXPORT_FILE_PREFIX } from "../constants";
+import { downloadCsv, formatDate, formatHours, formatPercent, today } from "../format";
+import { useCapacity, type Feedback } from "../hooks/use-capacity";
+import type { CapacitySummary, Period } from "../types";
+import { CapacityBoard } from "./board";
+import { CreatePeriodDialog } from "./create-dialog";
+import { PeriodDetailSheet } from "./detail-sheet";
+import {
+  CloseGlyph,
+  DownloadGlyph,
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+} from "./primitives";
+import {
+  ALL_COLUMNS,
+  COLUMN_LABELS,
+  CapacityTable,
+  OPTIONAL_COLUMNS,
+  nextSort,
+  sortRows,
+  type CapacityRow,
+  type ColumnKey,
+  type SortState,
+} from "./table";
 
-const tabs: { key: Tab; label: string }[] = [
-  { key: "periods", label: "Kỳ công suất" },
-  { key: "allocations", label: "Phân bổ dự án" },
-];
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
 
-function PeriodsTab({ notify }: { notify: (message: string) => void }) {
-  const [query, setQuery] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+type View = "table" | "board";
+
+export function ResourceCapacityPage() {
+  const capacity = useCapacity();
+  const [sort, setSort] = useState<SortState>({ key: "window", dir: "desc" });
+  const [hidden, setHidden] = useState<ColumnKey[]>([]);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [view, setView] = useState<View>("table");
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<PeriodDto | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
 
-  const filters: Record<string, string> = {};
-  if (query.trim()) filters.q = query.trim();
-  if (from) filters.from = from;
-  if (to) filters.to = to;
-  const { items, total, loading, error, reload } = usePeriods(filters);
-
-  return (
-    <>
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="flex flex-wrap items-end gap-2">
-          <Input
-            aria-label="Tìm kỳ công suất"
-            placeholder="Tìm theo nhân sự…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="sm:w-56"
-          />
-          <Input
-            type="date"
-            aria-label="Kỳ từ ngày"
-            value={from}
-            onChange={(event) => setFrom(event.target.value)}
-          />
-          <Input
-            type="date"
-            aria-label="Kỳ đến ngày"
-            value={to}
-            onChange={(event) => setTo(event.target.value)}
-          />
-          <span className="text-sm text-muted-foreground">
-            {items.length}/{total} kỳ
-          </span>
-        </div>
-        <Button onClick={() => setCreating(true)}>Tạo kỳ công suất</Button>
-      </div>
-
-      {error && <ErrorLine message={error} retry={reload} />}
-
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải kỳ công suất…
-        </p>
-      ) : !items.length ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h2 className="text-sm font-semibold">
-            {total ? "Không có kỳ phù hợp" : "Chưa có kỳ công suất"}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {total
-              ? "Đổi bộ lọc hoặc khoảng ngày để xem lại."
-              : "Tạo kỳ công suất để tính giờ khả dụng sau khi trừ ngày lễ và phép đã duyệt."}
-          </p>
-          <Button size="sm" onClick={() => setCreating(true)}>
-            Tạo kỳ công suất
-          </Button>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((period) => (
-            <li
-              key={period.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-surface p-3"
-            >
-              <div className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  {period.employeeName}{" "}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {period.employeeId}
-                  </span>
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {period.fromDate} → {period.toDate} · {period.workingDays}{" "}
-                  ngày làm việc · {period.standardHoursPerDay} giờ/ngày
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  Ngày lễ {period.holidayDays} · phép đã duyệt{" "}
-                  {period.leaveDays}
-                  {period.note ? ` · ${period.note}` : ""}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <a
-                  className="text-sm text-info underline-offset-4 hover:underline"
-                  href={`?tab=allocations&period=${period.id}&section=${encodeURIComponent("Phân bổ dự án")}`}
-                >
-                  Phân bổ
-                </a>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setEditing(period)}
-                >
-                  Sửa
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {creating && (
-        <Modal title="Tạo kỳ công suất" onClose={() => setCreating(false)}>
-          <PeriodForm notify={notify} onClose={() => setCreating(false)} />
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Sửa kỳ ${editing.employeeName}`}
-          onClose={() => setEditing(null)}
-        >
-          <PeriodForm
-            record={editing}
-            notify={notify}
-            onClose={() => setEditing(null)}
-          />
-        </Modal>
-      )}
-    </>
+  const rows = useMemo<CapacityRow[]>(
+    () =>
+      sortRows(
+        capacity.data.items.map((period) => ({
+          period,
+          summary: capacity.summaries[period.id] ?? null,
+        })),
+        sort,
+      ),
+    [capacity.data.items, capacity.summaries, sort],
   );
-}
 
-function AllocationsTab({
-  periods,
-  notify,
-}: {
-  periods: PeriodDto[];
-  notify: (message: string) => void;
-}) {
-  const params = useSearchParams();
-  const [selectedId, setSelectedId] = useState(params.get("period") ?? "");
-  const [status, setStatus] = useState<AllocationStatus | "">("");
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<AllocationDto | null>(null);
-  const [cancelling, setCancelling] = useState<AllocationDto | null>(null);
-  const [pendingId, setPendingId] = useState("");
-  const [actionError, setActionError] = useState("");
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const close = () => setColumnsOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setColumnsOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [columnsOpen]);
 
-  const filters: Record<string, string> = {};
-  if (selectedId) filters.periodId = selectedId;
-  if (status) filters.status = status;
-  const { items, total, loading, error, reload } = useAllocations(filters);
-  const workload = useWorkload(selectedId);
-  const selectedPeriod = periods.find((period) => period.id === selectedId);
+  const toggleColumn = (key: ColumnKey) => {
+    setHidden((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  };
 
-  async function confirmCancel() {
-    if (!cancelling || pendingId) return;
-    setPendingId(cancelling.id);
-    setActionError("");
-    try {
-      await client.cancelAllocation(cancelling);
-      capacityChanged();
-      notify("Đã hủy phân bổ dự án.");
-      setCancelling(null);
-    } catch (cause) {
-      setActionError(
-        cause instanceof Error ? cause.message : "Không thể hủy phân bổ",
-      );
-    } finally {
-      setPendingId("");
-    }
-  }
+  /* Only rows whose summary arrived take part in the totals — no guessed hours. */
+  const known = rows.reduce<CapacitySummary[]>((list, row) => {
+    if (row.summary) list.push(row.summary);
+    return list;
+  }, []);
+  const available = known.reduce((sum, item) => sum + item.availableHours, 0);
+  const allocated = known.reduce((sum, item) => sum + item.allocatedHours, 0);
+  const remaining = known.reduce((sum, item) => sum + item.remainingHours, 0);
+  const over = known.filter((item) => item.overCapacity).length;
+  const total = capacity.data.total;
+  /* A failed summary read is left out of the totals, so the note names the real sample. */
+  const scopeNote =
+    known.length === rows.length
+      ? `${rows.length.toLocaleString("vi-VN")} kỳ đang tải`
+      : `${known.length.toLocaleString("vi-VN")}/${rows.length.toLocaleString("vi-VN")} kỳ đọc được công suất`;
+  const forbidden = capacity.error?.status === 403;
+
+  const exportRows = (list: CapacityRow[]) => {
+    const header = [
+      "Mã nhân sự",
+      "Nhân sự",
+      "Từ ngày",
+      "Đến ngày",
+      "Ngày công",
+      "Ngày lễ",
+      "Ngày phép",
+      "Giờ chuẩn/ngày",
+      "Giờ khả dụng",
+      "Tỉ lệ phân bổ (%)",
+      "Giờ đã phân bổ",
+      "Giờ còn trống",
+      "Sử dụng (%)",
+      "Vượt công suất",
+    ];
+    const body = list.map(({ period, summary }) => [
+      period.employeeId,
+      period.employeeName,
+      formatDate(period.fromDate),
+      formatDate(period.toDate),
+      String(period.workingDays),
+      String(period.holidayDays),
+      String(period.leaveDays),
+      String(period.standardHoursPerDay),
+      summary ? formatHours(summary.availableHours) : "",
+      summary ? formatPercent(summary.allocatedPercent) : "",
+      summary ? formatHours(summary.allocatedHours) : "",
+      summary ? formatHours(summary.remainingHours) : "",
+      summary ? formatPercent(summary.utilization) : "",
+      summary ? (summary.overCapacity ? "Có" : "Không") : "",
+    ]);
+    downloadCsv(`${EXPORT_FILE_PREFIX}-${today()}.csv`, [header, ...body]);
+    capacity.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${list.length} kỳ ra tệp CSV.`,
+      hint: "Dòng chưa đọc được công suất sẽ để trống các cột giờ.",
+    });
+  };
 
   return (
-    <>
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="flex flex-wrap items-end gap-2">
-          <Select
-            aria-label="Chọn kỳ công suất"
-            value={selectedId}
-            onChange={(event) => setSelectedId(event.target.value)}
-            className="sm:w-72"
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Nhân sự</p>
+          <h1>Công suất &amp; phân bổ</h1>
+          <p className="page-lede">
+            Mỗi kỳ công suất của một nhân sự tính giờ khả dụng từ ngày làm việc, ngày lễ và
+            ngày phép. Phân bổ dự án theo phần trăm sẽ trừ dần vào giờ khả dụng; phần còn lại
+            là công suất chưa dùng.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => exportRows(rows)}
+            disabled={rows.length === 0}
+            title="Xuất các kỳ đang hiển thị ra CSV"
           >
-            <option value="">Tất cả kỳ</option>
-            {periods.map((period) => (
-              <option key={period.id} value={period.id}>
-                {period.employeeName} · {period.fromDate} → {period.toDate}
-              </option>
-            ))}
-          </Select>
-          <Select
-            aria-label="Lọc trạng thái phân bổ"
-            value={status}
-            onChange={(event) =>
-              setStatus(event.target.value as AllocationStatus | "")
+            <DownloadGlyph /> Xuất CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setCreating(true)}
+            disabled={!capacity.can("create")}
+            title={
+              capacity.can("create")
+                ? "Tạo kỳ công suất"
+                : "Bạn không có quyền tạo kỳ công suất"
             }
           >
-            <option value="">Tất cả trạng thái</option>
-            {Object.entries(allocationStatusLabels).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </Select>
-          <span className="text-sm text-muted-foreground">
-            {items.length}/{total} phân bổ
-          </span>
-        </div>
-        <Button onClick={() => setCreating(true)} disabled={!periods.length}>
-          Thêm phân bổ
-        </Button>
-      </div>
-
-      {workload.data && (
-        <div className="rounded-panel border border-border bg-surface p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">
-              Công suất kỳ {workload.data.period.fromDate} →{" "}
-              {workload.data.period.toDate}
-            </h2>
-            <Badge
-              tone={workload.data.summary.overCapacity ? "warning" : "success"}
-            >
-              {workload.data.summary.overCapacity
-                ? "Quá tải — chỉ cảnh báo"
-                : "Trong giới hạn"}
-            </Badge>
-          </div>
-          <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <dt className="text-xs text-muted-foreground">Giờ khả dụng</dt>
-              <dd className="font-medium">
-                {workload.data.summary.availableHours} giờ
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Đã phân bổ</dt>
-              <dd className="font-medium">
-                {workload.data.summary.allocatedHours} giờ (
-                {workload.data.summary.allocatedPercent}%)
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Còn lại</dt>
-              <dd className="font-medium">
-                {workload.data.summary.remainingHours} giờ
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Mức sử dụng</dt>
-              <dd className="font-medium">
-                {workload.data.summary.utilization}%
-              </dd>
-            </div>
-          </dl>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Công suất tính phía máy chủ: {workload.data.summary.workingDays}{" "}
-            ngày làm việc − {workload.data.summary.holidayDays} ngày lễ −{" "}
-            {workload.data.summary.leaveDays} ngày phép đã duyệt ×{" "}
-            {workload.data.summary.standardHoursPerDay} giờ/ngày. Quá tải chỉ
-            cảnh báo, quản lý vẫn quyết định.
-          </p>
-        </div>
-      )}
-      {workload.error && (
-        <ErrorLine message={workload.error} retry={workload.reload} />
-      )}
-
-      {(error || actionError) && (
-        <ErrorLine message={error || actionError} retry={reload} />
-      )}
-
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải phân bổ dự án…
-        </p>
-      ) : !items.length ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h2 className="text-sm font-semibold">
-            {total ? "Không có phân bổ phù hợp" : "Chưa có phân bổ dự án"}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {selectedPeriod
-              ? "Thêm phân bổ để theo dõi mức sử dụng công suất của kỳ này."
-              : "Chọn một kỳ công suất để xem và thêm phân bổ dự án."}
-          </p>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((allocation) => (
-            <li
-              key={allocation.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-surface p-3"
-            >
-              <div className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  {allocation.projectRef}
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {allocation.employeeName} · {allocation.percentage}% công suất
-                  {allocation.note ? ` · ${allocation.note}` : ""}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={allocationStatusTones[allocation.status]}>
-                  {allocationStatusLabels[allocation.status]}
-                </Badge>
-                {allocation.status !== "CANCELLED" && (
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setEditing(allocation)}
-                    >
-                      Sửa
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setCancelling(allocation)}
-                    >
-                      Hủy
-                    </Button>
-                  </>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {creating && (
-        <Modal title="Thêm phân bổ dự án" onClose={() => setCreating(false)}>
-          <AllocationForm
-            periods={periods}
-            initialPeriodId={selectedId}
-            notify={notify}
-            onClose={() => setCreating(false)}
-          />
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Sửa phân bổ ${editing.projectRef}`}
-          onClose={() => setEditing(null)}
-        >
-          <AllocationForm
-            record={editing}
-            periods={periods}
-            notify={notify}
-            onClose={() => setEditing(null)}
-          />
-        </Modal>
-      )}
-      {cancelling && (
-        <Modal title="Hủy phân bổ dự án" onClose={() => setCancelling(null)}>
-          <p className="text-sm">
-            Phân bổ {cancelling.projectRef} sẽ chuyển sang trạng thái đã hủy và
-            không tính vào mức sử dụng công suất.
-          </p>
-          {actionError && (
-            <p className="error" role="alert">
-              {actionError}
-            </p>
-          )}
-          <footer className="mt-4 flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setCancelling(null)}>
-              Giữ phân bổ
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={pendingId === cancelling.id}
-              onClick={() => void confirmCancel()}
-            >
-              {pendingId === cancelling.id ? "Đang hủy…" : "Hủy phân bổ"}
-            </Button>
-          </footer>
-        </Modal>
-      )}
-    </>
-  );
-}
-
-export function ModulePage() {
-  const params = useSearchParams();
-  const tab: Tab =
-    params.get("tab") === "allocations" ? "allocations" : "periods";
-  const [message, setMessage] = useState("");
-  const periods = usePeriods({});
-
-  function notify(text: string) {
-    setMessage(text);
-    window.setTimeout(() => setMessage(""), 5000);
-  }
-
-  return (
-    <div className="module-view">
-      <section className="records-panel">
-        <div className="flex flex-col gap-1">
-          <h1>{definition.title}</h1>
-          <p className="text-sm text-muted-foreground">
-            Công suất theo kỳ được tính tự động từ giờ chuẩn, ngày lễ và phép đã
-            duyệt; phân bổ dự án theo tỷ lệ và quá tải chỉ cảnh báo.
-          </p>
-        </div>
-        <nav aria-label="Nhóm công suất" className="flex flex-wrap gap-2">
-          {tabs.map((item) => (
-            <a
-              key={item.key}
-              href={`?tab=${item.key}&section=${encodeURIComponent(item.label)}`}
-              aria-current={tab === item.key ? "page" : undefined}
-              className={`rounded-control border px-3 py-1.5 text-sm ${
-                tab === item.key
-                  ? "border-primary bg-accent text-accent-foreground"
-                  : "border-border bg-surface text-muted-foreground"
-              }`}
-            >
-              {item.label}
-            </a>
-          ))}
-        </nav>
-        {tab === "periods" ? (
-          <PeriodsTab notify={notify} />
-        ) : (
-          <AllocationsTab periods={periods.items} notify={notify} />
-        )}
-      </section>
-
-      {message && (
-        <div className="toast" role="status">
-          {message}
-          <button aria-label="Đóng thông báo" onClick={() => setMessage("")}>
-            ×
+            <PlusGlyph /> Tạo kỳ
           </button>
         </div>
-      )}
+      </header>
+
+      <section className="metric-strip" aria-label="Tổng hợp công suất">
+        <div className="metric">
+          <span className="metric-value tabular">{formatHours(available)}</span>
+          <span className="metric-label">Giờ khả dụng</span>
+          <span className="metric-note">trên {scopeNote}</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{formatHours(allocated)}</span>
+          <span className="metric-label">Đã phân bổ</span>
+          <span className="metric-note">trên {scopeNote}</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{formatHours(remaining)}</span>
+          <span className="metric-label">Còn trống</span>
+          <span className="metric-note">trên {scopeNote}</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{over.toLocaleString("vi-VN")}</span>
+          <span className="metric-label">Vượt công suất</span>
+          <span className="metric-note">trên {scopeNote}</span>
+        </div>
+      </section>
+
+      {capacity.feedback ? (
+        <div className={ALERT_TONE[capacity.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{capacity.feedback.message}</span>
+            {capacity.feedback.hint ? (
+              <span className="muted">{capacity.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => capacity.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="capacity-search"
+                  className="input"
+                  type="search"
+                  value={capacity.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo tên nhân sự hoặc ghi chú…"
+                  aria-label="Tìm kỳ công suất theo nhân sự hoặc ghi chú"
+                  onChange={(event) =>
+                    capacity.patchQuery({ q: event.target.value, page: 1 })
+                  }
+                />
+                {capacity.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => capacity.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <label className="muted" htmlFor="capacity-from">
+                Chồng với kỳ từ
+              </label>
+              <input
+                id="capacity-from"
+                className="input tabular"
+                type="date"
+                value={capacity.query.from ?? ""}
+                onChange={(event) =>
+                  capacity.patchQuery({ from: event.target.value, page: 1 })
+                }
+                style={{ width: 152 }}
+              />
+
+              <label className="muted" htmlFor="capacity-to">
+                đến
+              </label>
+              <input
+                id="capacity-to"
+                className="input tabular"
+                type="date"
+                value={capacity.query.to ?? ""}
+                onChange={(event) =>
+                  capacity.patchQuery({ to: event.target.value, page: 1 })
+                }
+                style={{ width: 152 }}
+              />
+
+              <div className="popover-anchor">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-expanded={columnsOpen}
+                  aria-haspopup="true"
+                  onClick={() => setColumnsOpen((open) => !open)}
+                >
+                  Cột hiển thị
+                </button>
+                {columnsOpen ? (
+                  <div className="menu" role="group" aria-label="Chọn cột hiển thị">
+                    {OPTIONAL_COLUMNS.map((key) => (
+                      <label key={key} className="menu-item">
+                        <input
+                          type="checkbox"
+                          checked={!hidden.includes(key)}
+                          onChange={() => toggleColumn(key)}
+                        />
+                        {COLUMN_LABELS[key]}
+                      </label>
+                    ))}
+                    <button type="button" className="menu-item" onClick={() => setHidden([])}>
+                      Hiện tất cả {ALL_COLUMNS.length} cột
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="toolbar-actions">
+              <div className="segmented" role="group" aria-label="Cách hiển thị">
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={view === "table"}
+                  data-active={view === "table" ? "true" : undefined}
+                  onClick={() => setView("table")}
+                >
+                  Bảng
+                </button>
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={view === "board"}
+                  data-active={view === "board" ? "true" : undefined}
+                  onClick={() => setView("board")}
+                >
+                  Thẻ
+                </button>
+              </div>
+              <span className="result-count">
+                {total.toLocaleString("vi-VN")} kỳ
+                {capacity.filtersActive ? ` · ${rows.length} dòng khớp` : ""}
+              </span>
+            </div>
+          </div>
+
+          {capacity.filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {capacity.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{capacity.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => capacity.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {capacity.query.from ? (
+                <span className="chip" data-active="true">
+                  Chồng với kỳ từ {formatDate(capacity.query.from)}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => capacity.patchQuery({ from: "", page: 1 })}
+                    aria-label="Bỏ lọc ngày bắt đầu"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {capacity.query.to ? (
+                <span className="chip" data-active="true">
+                  Đến {formatDate(capacity.query.to)}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => capacity.patchQuery({ to: "", page: 1 })}
+                    aria-label="Bỏ lọc ngày kết thúc"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={capacity.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem công suất</span>
+            <p className="empty-body">
+              Yêu cầu quản trị hệ thống cấp quyền “Xem” cho phân hệ Công suất nhân sự rồi tải
+              lại trang.
+            </p>
+            <button type="button" className="btn btn-ghost" onClick={capacity.reload}>
+              Tải lại
+            </button>
+          </div>
+        ) : capacity.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách kỳ công suất</span>
+            <p className="empty-body">{capacity.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={capacity.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : !capacity.loading && rows.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {capacity.filtersActive ? "Không có kỳ nào khớp bộ lọc" : "Chưa có kỳ công suất nào"}
+            </span>
+            <p className="empty-body">
+              {capacity.filtersActive
+                ? "Thử bỏ một vài điều kiện, hoặc xoá hết bộ lọc để xem toàn bộ danh sách."
+                : "Tạo kỳ công suất cho một nhân sự để bắt đầu phân bổ dự án theo phần trăm."}
+            </p>
+            {capacity.filtersActive ? (
+              <button type="button" className="btn btn-ghost" onClick={capacity.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setCreating(true)}
+                disabled={!capacity.can("create")}
+              >
+                <PlusGlyph /> Tạo kỳ
+              </button>
+            )}
+          </div>
+        ) : view === "board" ? (
+          <CapacityBoard
+            rows={rows}
+            onOpen={(period: Period) => setOpenId(period.id)}
+          />
+        ) : (
+          <CapacityTable
+            rows={rows}
+            loading={capacity.loading}
+            sort={sort}
+            onSort={(key) => setSort((current) => nextSort(current, key))}
+            hidden={hidden}
+            onOpen={(period) => setOpenId(period.id)}
+          />
+        )}
+
+        {!forbidden && !capacity.error && rows.length > 0 ? (
+          <Pagination
+            page={capacity.query.page}
+            pageSize={capacity.query.pageSize}
+            total={total}
+            idPrefix="capacity"
+            onPage={(page) => capacity.patchQuery({ page })}
+            onPageSize={(pageSize) => capacity.patchQuery({ pageSize, page: 1 })}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Danh sách kỳ trả về dữ liệu đầu vào; mỗi dòng cần một lần đọc
+        <span className="mono"> /summary</span> để có giờ khả dụng và tỉ lệ phân bổ, nên trang
+        mặc định 10 dòng và chỉ cộng các dòng đã đọc được. Khoảng ngày lọc theo kiểu “chồng
+        lấn” với kỳ. Ngày phép chỉ nhập được khi tạo kỳ vì API cập nhật không nhận trường này.
+        Tên dự án trong phân bổ là chuỗi tự do, không gắn với mã dự án.
+      </p>
+
+      {creating ? (
+        <CreatePeriodDialog onCreate={capacity.create} onClose={() => setCreating(false)} />
+      ) : null}
+
+      {openId ? (
+        <PeriodDetailSheet
+          periodId={openId}
+          canCreate={capacity.can("create")}
+          canUpdate={capacity.can("update")}
+          onChanged={capacity.reload}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
     </div>
   );
 }

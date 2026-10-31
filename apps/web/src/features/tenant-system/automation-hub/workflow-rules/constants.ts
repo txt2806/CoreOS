@@ -1,117 +1,109 @@
 import type {
-  AppliedAction,
-  Condition,
-  RuleDraft,
-} from "@/features/tenant-system/automation-hub/workflow-rules/types";
+  ActionKind,
+  Operator,
+  RuleField,
+  RunOutcome,
+  Trigger,
+} from "./types";
 
-export const definition = {
-  id: "tenant-system/workflow-rules",
-  icon: 12,
-  label: "Quy tắc tự động",
-  title: "Quy tắc tự động",
-  singular: "quy tắc",
-  dateLabel: "Lần chạy cuối",
-  personLabel: "Phạm vi",
-  tabs: [],
-  sections: [],
-  statuses: [],
-  fields: [],
-  navigation: {
-    title: "Tự động hóa",
-    collapsed: false,
-    defaultSection: "Quy tắc",
-    allSection: "Quy tắc",
-    items: [
-      { label: "Quy tắc", href: "/tenant-system/workflow-rules" },
-      {
-        label: "Lượt chạy",
-        href: "/tenant-system/workflow-rules?tab=runs&section=Lượt chạy",
-      },
-      {
-        label: "Chạy thử",
-        href: "/tenant-system/workflow-rules?tab=simulate&section=Chạy thử",
-      },
-    ],
-  },
-} as const;
+/** Exact `FEATURE` used by `@RequirePermission` in the controller. */
+export const FEATURE_KEY = "tenant-system/automation-hub/workflow-rules";
 
-export const triggerLabels = {
+export const PAGE_SIZES = [10, 25, 50];
+export const DEFAULT_PAGE_SIZE = 10;
+
+/** Server limits from `ruleInput` / `conditionSchema`. */
+export const MAX_CONDITIONS = 10;
+export const MAX_ACTIONS = 5;
+export const MAX_CONDITION_VALUE = 200;
+export const MAX_POSITION = 1000;
+export const MAX_LOCK_SECONDS = 60;
+export const DEFAULT_POSITION = 100;
+export const DEFAULT_LOCK_SECONDS = 3;
+/** `runsQuery.limit` is capped at 100; the sheet asks for one page worth. */
+export const RUN_LIMIT = 30;
+
+export const TRIGGERS: readonly Trigger[] = ["created", "updated"];
+
+export const TRIGGER_LABELS: Record<Trigger, string> = {
   created: "Khi tạo mới",
   updated: "Khi cập nhật",
-} as const;
+};
 
-export const fieldLabels = {
+export const FIELDS: readonly RuleField[] = [
+  "status",
+  "assignee",
+  "reviewer",
+  "scope",
+  "code",
+  "name",
+  "date",
+];
+
+export const FIELD_LABELS: Record<RuleField, string> = {
   status: "Trạng thái",
   assignee: "Người phụ trách",
   reviewer: "Người kiểm tra",
   scope: "Phạm vi",
   code: "Mã công việc",
-  name: "Tiêu đề",
+  name: "Tên công việc",
   date: "Hạn hoàn thành",
-} as const;
+};
 
-export const operatorLabels = {
+export const OPERATORS: readonly Operator[] = [
+  "is",
+  "isNot",
+  "in",
+  "notIn",
+  "contains",
+  "exists",
+  "changedTo",
+];
+
+export const OPERATOR_LABELS: Record<Operator, string> = {
   is: "bằng",
   isNot: "khác",
   in: "thuộc danh sách",
   notIn: "không thuộc danh sách",
   contains: "chứa",
   exists: "có giá trị",
-  changedTo: "đổi thành",
-} as const;
+  changedTo: "vừa đổi thành",
+};
 
-export const actionLabels = {
-  assign: "Giao cho người",
+/** Mirrors how `rule-engine.ts` reads each value. */
+export const OPERATOR_HINTS: Record<Operator, string> = {
+  is: "So khớp đầy đủ, không phân biệt hoa thường.",
+  isNot: "Đúng khi giá trị khác hẳn.",
+  in: "Nhiều giá trị, cách nhau bằng dấu phẩy.",
+  notIn: "Đúng khi giá trị không nằm trong danh sách.",
+  contains: "Đúng khi giá trị chứa đoạn này.",
+  exists: "Không dùng ô giá trị; đúng khi trường có nội dung.",
+  changedTo: "Chỉ đúng khi trường vừa đổi sang giá trị này (tạo mới cũng tính).",
+};
+
+export const ACTION_KINDS: readonly ActionKind[] = [
+  "assign",
+  "status",
+  "comment",
+  "notify",
+];
+
+export const ACTION_LABELS: Record<ActionKind, string> = {
+  assign: "Giao người phụ trách",
   status: "Chuyển trạng thái",
   comment: "Thêm bình luận",
   notify: "Gửi thông báo",
-} as const;
+};
 
-export const outcomeLabels = {
+export const OUTCOME_LABELS: Record<RunOutcome, string> = {
   APPLIED: "Đã áp dụng",
   SKIPPED: "Bỏ qua",
   FAILED: "Lỗi",
   SIMULATED: "Mô phỏng",
-} as const;
-
-export const outcomeVariants = {
-  APPLIED: "success",
-  SKIPPED: "neutral",
-  FAILED: "danger",
-  SIMULATED: "info",
-} as const;
-
-export const messages = {
-  load: "Không tải được danh sách quy tắc.",
-  empty: "Chưa có quy tắc nào. Tạo quy tắc đầu tiên để bắt đầu tự động hóa.",
-  saved: "Đã lưu quy tắc.",
-  removed: "Đã xóa quy tắc.",
-  toggled: "Đã đổi trạng thái quy tắc.",
-  hint: "Mỗi lượt chỉ áp dụng một lần cho một công việc: quy tắc tự khóa công việc trong vài giây để tránh vòng lặp.",
 };
 
-/** One line per rule, used by the list and the dry-run result. */
-export function summarizeCondition(condition: Condition) {
-  return `${fieldLabels[condition.field]} ${operatorLabels[condition.operator]}${
-    condition.operator === "exists" ? "" : ` “${condition.value}”`
-  }`;
-}
+export const PLACEHOLDER_HINT =
+  "Có thể chèn {{code}}, {{name}}, {{status}}, {{assignee}} hoặc {{previous.status}} vào nội dung; máy chủ thay bằng giá trị thật lúc chạy.";
 
-export function summarizeAction(
-  action: AppliedAction | RuleDraft["actions"][number],
-) {
-  switch (action.kind) {
-    case "assign":
-      return `${actionLabels.assign} ${action.assignee}`;
-    case "status":
-      return `${actionLabels.status} ${action.status}`;
-    case "comment":
-      return `${actionLabels.comment}: ${action.body.slice(0, 60)}`;
-    case "notify": {
-      const recipients = Array.isArray(action.recipients)
-        ? action.recipients.join(", ")
-        : action.recipients;
-      return `${actionLabels.notify} ${recipients}`;
-    }
-  }
-}
+export const ORDER_NOTE =
+  "Quy tắc chạy theo thứ tự vị trí tăng dần, cùng vị trí thì theo thời điểm tạo. Bật “dừng sau khi khớp” để chặn các quy tắc phía sau.";

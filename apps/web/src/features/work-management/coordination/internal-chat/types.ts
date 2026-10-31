@@ -1,73 +1,62 @@
-import { z } from "zod";
-const recordInput = z
-  .object({
-    code: z.string().trim().min(1).max(100),
-    name: z.string().trim().min(1).max(500),
-    scope: z.string().trim().max(250).default(""),
-    status: z.enum(["Đang mở", "Đã đóng"]),
-    date: z.iso.date(),
-    assignee: z.string().trim().max(150).default(""),
-    note: z.string().trim().max(2000).default(""),
-  })
-  .strict();
-const recordPatch = recordInput
-  .omit({ scope: true, assignee: true, note: true })
-  .partial()
-  .extend({
-    scope: z.string().trim().max(250).optional(),
-    assignee: z.string().trim().max(150).optional(),
-    note: z.string().trim().max(2000).optional(),
-  });
-export const listQuery = z
-  .object({
-    page: z.coerce.number().int().min(1).max(100000).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(100),
-    q: z.string().trim().max(500).optional(),
-    scope: z.string().max(250).optional(),
-    status: z.string().max(150).optional(),
-    assignee: z.string().trim().max(150).optional(),
-  })
-  .strict();
-export const versionSchema = z
-  .object({ version: z.number().int().positive() })
-  .strict();
+/** Mirrors `apps/api/src/features/work-management/coordination/internal-chat/dto/internal-chat.dto.ts`. */
+export const CONVERSATION_STATUSES = ["Đang mở", "Đã đóng"] as const;
 
-export const fieldsSchema = z
-  .object({
-    channel: z.string().trim().max(1000).optional(),
-    participants: z.string().trim().max(1000).optional(),
-    comments: z
-      .array(
-        z
-          .object({
-            id: z.uuid(),
-            text: z.string().trim().min(1).max(2000),
-            author: z.string().trim().min(1).max(150),
-            createdAt: z.iso.datetime(),
-          })
-          .strict(),
-      )
-      .max(500)
-      .optional(),
-  })
-  .strict();
-export const createSchema = recordInput.extend({
-  fields: fieldsSchema.default({}),
-});
-export const updateSchema = recordPatch
-  .extend({
-    fields: fieldsSchema.optional(),
-    version: z.number().int().positive(),
-  })
-  .strict();
-export const recordSchema = createSchema.extend({
-  id: z.uuid(),
-  module: z.literal("messages"),
-  version: z.number().int().positive(),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
-});
-export type RecordInput = z.input<typeof createSchema>;
-export type RecordOutput = z.infer<typeof recordSchema>;
-export type RecordDto = RecordOutput;
-export type ListQuery = z.infer<typeof listQuery>;
+export type ConversationStatus = (typeof CONVERSATION_STATUSES)[number];
+
+export interface ChatComment {
+  id: string;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
+export interface ConversationFields {
+  channel?: string;
+  participants?: string;
+  comments?: ChatComment[];
+}
+
+export interface Conversation {
+  id: string;
+  module: "messages";
+  code: string;
+  name: string;
+  scope: string;
+  status: ConversationStatus;
+  date: string;
+  assignee: string;
+  note: string;
+  fields: ConversationFields;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationInput {
+  code: string;
+  name: string;
+  scope: string;
+  status: ConversationStatus;
+  date: string;
+  assignee: string;
+  note: string;
+  fields: ConversationFields;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}
+
+/** Only the fields the chat screen reads from `GET /auth/session`. */
+export interface SessionView {
+  actor: { displayName: string; employeeId: string };
+}

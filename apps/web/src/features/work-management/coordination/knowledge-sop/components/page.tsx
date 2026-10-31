@@ -1,361 +1,384 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type { RecordDto } from "@/features/work-management/coordination/knowledge-sop/types";
-import { definition } from "@/features/work-management/coordination/knowledge-sop/constants";
-import { client } from "@/features/work-management/coordination/knowledge-sop/api/client";
-import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/coordination/knowledge-sop/hooks/use-records";
-import {
-  Modal,
-  useWorkspace,
-} from "@/features/work-management/coordination/knowledge-sop/components/primitives/workspace";
-import { Button } from "@/features/work-management/coordination/knowledge-sop/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/work-management/coordination/knowledge-sop/components/primitives/forms";
-import { Badge } from "@/features/work-management/coordination/knowledge-sop/components/primitives/foundations";
-import { RecordForm } from "@/features/work-management/coordination/knowledge-sop/components/record-form";
-import styles from "@/features/work-management/coordination/knowledge-sop/components/styles.module.css";
 
-export function ModulePage() {
-  const params = useSearchParams();
-  const { openCreate, notify } = useWorkspace();
-  const { records, loading, error, reload } = useModuleRecords();
-  const [query, setQuery] = useState(params.get("q") || "");
-  const [status, setStatus] = useState("");
-  const [detail, setDetail] = useState<RecordDto | null>(null),
-    [editing, setEditing] = useState<RecordDto | null>(null),
-    [deleting, setDeleting] = useState<RecordDto | null>(null),
-    [pending, setPending] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [view, setView] = useState("cards");
-  const effectiveStatus =
-    status === "all" ? "" : status || params.get("status") || "";
-  const filtered = records.filter(
-    (record) =>
-      (!effectiveStatus || record.status === effectiveStatus) &&
-      `${record.code} ${record.name} ${record.assignee} ${record.note} ${Object.values(record.fields).join(" ")}`
-        .toLocaleLowerCase("vi")
-        .includes(query.trim().toLocaleLowerCase("vi")),
-  );
-  async function update(
-    record: RecordDto,
-    patch: Parameters<typeof client.update>[1],
-  ) {
-    if (pending) return false;
-    setPending(true);
-    setActionError("");
-    try {
-      const next = await client.update(record, patch);
-      setDetail((current) => (current?.id === next.id ? next : current));
-      recordsChanged();
-      notify("Đã cập nhật thành công.");
-      return true;
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Không thể cập nhật");
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }
-  function exportCsv() {
-    const cell = (value: string) =>
-      '"' +
-      (/^[=+@-]/.test(value) ? "'" : "") +
-      value.replaceAll('"', '""') +
-      '"';
-    const csv = [
-      [
-        "Mã",
-        "Tiêu đề",
-        "Trạng thái",
-        definition.dateLabel,
-        definition.personLabel,
-      ],
-      ...filtered.map((r) => [r.code, r.name, r.status, r.date, r.assignee]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "notes.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+import { useState } from "react";
+import { NOTE_STATUSES } from "../types";
+import type { KnowledgeNote, NoteStatus } from "../types";
+import { excerpt, formatDate, formatDateTime, tagList } from "../format";
+import { useKnowledge, type Feedback } from "../hooks/use-knowledge";
+import { NoteForm } from "./note-form";
+import { ReaderSheet } from "./reader-sheet";
+import {
+  CloseGlyph,
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+  SkeletonLines,
+  StatusBadge,
+} from "./primitives";
+
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+export function KnowledgeSopPage() {
+  const knowledge = useKnowledge();
+  const [reading, setReading] = useState<KnowledgeNote | null>(null);
+  const [editing, setEditing] = useState<KnowledgeNote | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const filtersActive = Boolean(knowledge.query.q || knowledge.query.status);
+  const forbidden = knowledge.error?.status === 403;
+  const published = knowledge.totals["Đã xuất bản"];
+  const drafts = knowledge.totals["Bản nháp"];
+  const archived = knowledge.totals["Lưu trữ"];
+
+  /* Read status changes through the list rows so the sheet shows the optimistic value. */
+  const live = reading
+    ? knowledge.rows.find((row) => row.id === reading.id) ?? reading
+    : null;
 
   return (
-    <div className={styles.root}>
-      <div className="module-view">
-        <section className="records-panel">
-          <div className={styles.header}>
-            <div>
-              <h1>{definition.title}</h1>
-              <p>Lưu lại ý tưởng, tài liệu và kiến thức của đội ngũ.</p>
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Điều phối công việc</p>
+          <h1>Ghi chú &amp; quy trình chuẩn</h1>
+          <p className="page-lede">
+            Kho hướng dẫn dùng chung của ca vận hành. Tìm theo mã hoặc tên bài, mở bài để
+            đọc toàn văn rồi xuất bản khi nội dung đã đủ để người khác làm theo.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+            <PlusGlyph />
+            Viết bài mới
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={knowledge.reload}
+            aria-busy={knowledge.loading ? "true" : undefined}
+          >
+            Tải lại
+          </button>
+        </div>
+      </header>
+
+      <section className="metric-strip" aria-label="Tình hình kho tri thức">
+        <div className="metric">
+          <span className="metric-value tabular">
+            {knowledge.data.total.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Bài trong kho</span>
+          <span className="metric-note">theo bộ lọc hiện tại</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {published === undefined ? "—" : published.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Đã xuất bản</span>
+          <span className="metric-note">
+            {published === undefined ? "máy chủ chưa trả lời" : "sẵn sàng để tra cứu"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {drafts === undefined ? "—" : drafts.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Bản nháp</span>
+          <span className="metric-note">
+            {drafts === undefined ? "máy chủ chưa trả lời" : "còn đang soạn"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {archived === undefined ? "—" : archived.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Lưu trữ</span>
+          <span className="metric-note">
+            {archived === undefined ? "máy chủ chưa trả lời" : "còn đọc được, không còn hiện mặc định"}
+          </span>
+        </div>
+      </section>
+
+      {knowledge.feedback ? (
+        <div className={ALERT_TONE[knowledge.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{knowledge.feedback.message}</span>
+            {knowledge.feedback.hint ? (
+              <span className="muted">{knowledge.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => knowledge.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="notes-search"
+                  className="input"
+                  type="search"
+                  value={knowledge.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo mã hoặc tên bài…"
+                  aria-label="Tìm bài trong kho tri thức"
+                  onChange={(event) =>
+                    knowledge.patchQuery({ q: event.target.value, page: 1 })
+                  }
+                />
+                {knowledge.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => knowledge.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={knowledge.query.status ?? ""}
+                aria-label="Lọc theo trạng thái bài"
+                onChange={(event) =>
+                  knowledge.patchQuery({
+                    status: event.target.value as NoteStatus | "",
+                    page: 1,
+                  })
+                }
+                style={{ width: 168 }}
+              >
+                <option value="">Mọi trạng thái</option>
+                {NOTE_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div className={styles.actions}>
-              <Button variant="secondary" onClick={exportCsv}>
-                Xuất CSV
-              </Button>
-              <Button onClick={openCreate}>Tạo mới</Button>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {knowledge.data.total.toLocaleString("vi-VN")} bài ·{" "}
+                {knowledge.rows.length} hiển thị
+              </span>
             </div>
           </div>
 
-          <div className={styles.toolbar}>
-            <Input
-              aria-label="Tìm kiếm"
-              placeholder={"Tìm " + definition.singular + "…"}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <Select
-              aria-label="Lọc trạng thái"
-              value={effectiveStatus}
-              onChange={(e) => setStatus(e.target.value || "all")}
-            >
-              <option value="">Tất cả trạng thái</option>
-              {definition.statuses.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </Select>
-            <Button
-              variant={view === "list" ? "primary" : "secondary"}
-              onClick={() => setView("list")}
-            >
-              Danh sách
-            </Button>
-            <Button
-              variant={view === "cards" ? "primary" : "secondary"}
-              onClick={() => setView("cards")}
-            >
-              Thẻ
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              {filtered.length} mục
-            </span>
-          </div>
-          {(error || actionError) && (
-            <div role="alert" className="error">
-              {error || actionError}
-              <Button variant="ghost" onClick={reload}>
-                Thử lại
-              </Button>
+          {filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {knowledge.query.q ? (
+                <span className="chip" data-active="true">
+                  Tìm: “{knowledge.query.q}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => knowledge.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {knowledge.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {knowledge.query.status}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => knowledge.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={knowledge.clearFilters}
+              >
+                Xoá bộ lọc
+              </button>
             </div>
-          )}
-          {loading ? (
-            <p role="status">Đang tải dữ liệu…</p>
-          ) : !filtered.length ? (
-            <div className={styles.empty}>
-              <h2>Chưa có {definition.singular} phù hợp</h2>
-              <p>Tạo nội dung đầu tiên hoặc thay đổi điều kiện tìm kiếm.</p>
-              <Button onClick={openCreate}>Tạo mới</Button>
-            </div>
-          ) : (
-            <>
-              {view === "list" ? (
-                <div className={styles.scroll}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Mã</th>
-                        <th>Tiêu đề</th>
-                        <th>Trạng thái</th>
-                        <th>{definition.dateLabel}</th>
-                        <th>{definition.personLabel}</th>
-                        <th>Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((record) => (
-                        <tr key={record.id}>
-                          <td>{record.code}</td>
-                          <td>
-                            <button
-                              className="font-medium"
-                              onClick={() => setDetail(record)}
-                            >
-                              {record.name}
-                            </button>
-                          </td>
-                          <td>
-                            <Select
-                              aria-label={"Trạng thái " + record.code}
-                              disabled={pending}
-                              value={record.status}
-                              onChange={(e) =>
-                                void update(record, {
-                                  status: e.target.value as RecordDto["status"],
-                                })
-                              }
-                            >
-                              {definition.statuses.map((s) => (
-                                <option key={s}>{s}</option>
-                              ))}
-                            </Select>
-                          </td>
-                          <td>{record.date}</td>
-                          <td>{record.assignee || "Chưa phân công"}</td>
-                          <td>
-                            <div className={styles.actions}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditing(record)}
-                              >
-                                Sửa
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleting(record)}
-                              >
-                                Xóa
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className={styles.grid}>
-                  {filtered.map((record) => (
-                    <article className={styles.card} key={record.id}>
-                      <div className={styles.meta}>
-                        <span>{record.code}</span>
-                        <Badge>{record.status}</Badge>
-                      </div>
-                      <h3>
-                        <button
-                          type="button"
-                          className={styles.titleLink}
-                          onClick={() => setDetail(record)}
-                        >
-                          {record.name}
-                        </button>
-                      </h3>
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {record.note}
-                      </p>
-                      <div className={styles.meta}>
-                        <span>{record.assignee || "Chưa phân công"}</span>
-                        <span>{record.date}</span>
-                      </div>
-                      <div className={styles.actions}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditing(record)}
-                        >
-                          Sửa
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDeleting(record)}
-                        >
-                          Xóa
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-      {detail && (
-        <Modal title={detail.name} onClose={() => setDetail(null)}>
-          <div className={styles.details}>
-            <Badge>{detail.status}</Badge>
-            <p>
-              <strong>{detail.code}</strong> · {detail.date} ·{" "}
-              {detail.assignee || "Chưa phân công"}
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem kho tri thức</span>
+            <p className="empty-body">
+              Phân hệ Ghi chú &amp; SOP chỉ mở cho người có quyền “Xem”. Yêu cầu quản trị
+              hệ thống cấp quyền rồi tải lại trang.
             </p>
-            <p>{detail.note || "Chưa có mô tả."}</p>
-            {Object.entries(detail.fields)
-              .filter(([, value]) => !Array.isArray(value))
-              .map(([key, value]) => (
-                <p key={key}>
-                  <strong>
-                    {definition.fields.find((field) => field.key === key)
-                      ?.label || key}
-                    :{" "}
-                  </strong>
-                  {String(value)}
-                </p>
-              ))}
+            <button type="button" className="btn btn-ghost" onClick={knowledge.reload}>
+              Tải lại
+            </button>
           </div>
-          <footer>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setEditing(detail);
-                setDetail(null);
-              }}
-            >
-              Chỉnh sửa
-            </Button>
-            <Button onClick={() => setDetail(null)}>Đóng</Button>
-          </footer>
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={"Chỉnh sửa " + definition.singular}
-          onClose={() => setEditing(null)}
-        >
-          <RecordForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {deleting && (
-        <Modal title="Xác nhận xóa" onClose={() => setDeleting(null)}>
-          <div className="form-body">
-            <p>Bạn muốn xóa “{deleting.name}”?</p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
+        ) : knowledge.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được kho tri thức</span>
+            <p className="empty-body">{knowledge.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={knowledge.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : knowledge.loading && knowledge.rows.length === 0 ? (
+          <div className="surface-body">
+            <SkeletonLines rows={5} />
+          </div>
+        ) : knowledge.rows.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {filtersActive
+                ? "Không có bài nào khớp bộ lọc"
+                : knowledge.data.total > 0
+                  ? "Trang này không còn bài nào"
+                  : "Kho tri thức đang trống"}
+            </span>
+            <p className="empty-body">
+              {filtersActive
+                ? "Thử từ khoá khác hoặc bỏ lọc trạng thái để xem lại toàn bộ kho."
+                : knowledge.data.total > 0
+                  ? "Dữ liệu đã đổi sau lần tải trước. Về trang đầu để xem các bài còn lại."
+                  : "Viết bài đầu tiên để ca sau không phải hỏi lại quy trình đã thống nhất."}
+            </p>
+            {filtersActive ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={knowledge.clearFilters}
+              >
+                Xoá bộ lọc
+              </button>
+            ) : knowledge.data.total > 0 ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => knowledge.patchQuery({ page: 1 })}
+              >
+                Về trang đầu
+              </button>
+            ) : (
+              <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+                <PlusGlyph />
+                Viết bài mới
+              </button>
             )}
           </div>
-          <footer>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={pending}
-              onClick={async () => {
-                if (pending) return;
-                setPending(true);
-                setActionError("");
-                try {
-                  await client.remove(deleting);
-                  recordsChanged();
-                  setDeleting(null);
-                  notify("Đã xóa thành công.");
-                } catch (e) {
-                  setActionError(
-                    e instanceof Error ? e.message : "Không thể xóa",
-                  );
-                } finally {
-                  setPending(false);
-                }
-              }}
-            >
-              Xóa
-            </Button>
-          </footer>
-        </Modal>
-      )}
+        ) : (
+          <div className="list" aria-label="Danh sách bài trong kho tri thức">
+            {knowledge.rows.map((note) => (
+              <button
+                key={note.id}
+                type="button"
+                className="list-row"
+                onClick={() => setReading(note)}
+                aria-label={`Đọc bài ${note.code} — ${note.name}`}
+              >
+                <span className="list-main">
+                  <span className="row items-center gap-2 wrap">
+                    <span className="mono muted">{note.code}</span>
+                    <StatusBadge status={note.status} />
+                    {note.fields.category ? (
+                      <span className="chip">{note.fields.category}</span>
+                    ) : null}
+                  </span>
+                  <strong>{note.name}</strong>
+                  <span className="list-meta">{excerpt(note.fields)}</span>
+                  <span className="list-meta">
+                    {note.assignee || "Chưa gán người phụ trách"}
+                    {note.scope ? ` · ${note.scope}` : ""}
+                    {tagList(note.fields).length > 0
+                      ? ` · ${tagList(note.fields).join(", ")}`
+                      : ""}
+                  </span>
+                </span>
+
+                <span className="stack gap-1 items-end" style={{ flex: "none" }}>
+                  <span className="muted tabular" style={{ fontSize: 12 }}>
+                    {formatDate(note.date)}
+                  </span>
+                  <span className="muted tabular" style={{ fontSize: 12 }}>
+                    sửa {formatDateTime(note.updatedAt)}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {!forbidden && !knowledge.error && knowledge.total > 0 ? (
+          <Pagination
+            id="notes"
+            page={knowledge.data.page}
+            pageSize={knowledge.data.pageSize}
+            total={knowledge.total}
+            onPage={(page) => knowledge.patchQuery({ page })}
+            onPageSize={(size) => knowledge.patchQuery({ pageSize: size, page: 1 })}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Mỗi bài là một bản ghi duy nhất: máy chủ chưa mở endpoint lịch sử phiên bản, luồng
+        duyệt hai người hay gắn Task/Project, nên màn hình chỉ hiển thị nội dung và trạng
+        thái hiện tại. Nội dung lưu dạng văn bản thuần và được hiển thị nguyên văn, không
+        render HTML.
+      </p>
+
+      {live ? (
+        <ReaderSheet
+          note={live}
+          pending={knowledge.pending === live.id}
+          onEdit={() => {
+            setEditing(live);
+            setReading(null);
+          }}
+          onStatus={(status) => void knowledge.changeStatus(live, status)}
+          onDelete={async () => {
+            await knowledge.remove(live);
+            setReading(null);
+          }}
+          onClose={() => setReading(null)}
+        />
+      ) : null}
+
+      {creating ? (
+        <NoteForm
+          note={null}
+          onCreate={knowledge.create}
+          onUpdate={knowledge.save}
+          onClose={() => setCreating(false)}
+        />
+      ) : null}
+
+      {editing ? (
+        <NoteForm
+          note={editing}
+          onCreate={knowledge.create}
+          onUpdate={knowledge.save}
+          onClose={() => setEditing(null)}
+        />
+      ) : null}
     </div>
   );
 }

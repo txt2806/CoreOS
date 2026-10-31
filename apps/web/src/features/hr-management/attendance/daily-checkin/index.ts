@@ -1,5 +1,2 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/hr-management/attendance/daily-checkin/components/entrypoints";
-export { definition } from "@/features/hr-management/attendance/daily-checkin/constants";
+export { DailyCheckinPage } from "./components/page";
+export type { AttendanceRecord, AttendanceStatus } from "./types";

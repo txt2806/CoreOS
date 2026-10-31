@@ -1,31 +1,13 @@
-export const definition = {
-  id: "tenant-system/auth",
-  icon: 9,
-  label: "Đăng nhập",
-  title: "Đăng nhập OneOps",
-  singular: "phiên đăng nhập",
-  dateLabel: "Gần nhất",
-  personLabel: "Người dùng",
-  tabs: [],
-  sections: [],
-  statuses: [],
-  fields: [],
-  navigation: {
-    title: "Đăng nhập",
-    collapsed: true,
-    defaultSection: "",
-    allSection: "",
-    items: [],
-  },
-} as const;
+/**
+ * Catalog key of this branch. The login routes themselves are `@Public()` in the
+ * controller; this key guards the sign-in screen in the permission matrix.
+ */
+export const FEATURE_KEY = "tenant-system/access-control/tenant-auth";
 
-export const roleLabels = {
-  EMPLOYEE: "Nhân viên",
-  MANAGER: "Quản lý",
-} as const;
+/** Field limits come from `loginSchema` / `passwordChangeSchema`. */
+export const MAX_USERNAME_LENGTH = 80;
+export const MAX_PASSWORD_LENGTH = 72;
+export const MIN_PASSWORD_LENGTH = 8;
 
-export const messages = {
-  wrongCredentials: "Tên đăng nhập hoặc mật khẩu không đúng.",
-  offline: "Không thể kết nối API. Vui lòng thử lại.",
-  expired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
-} as const;
+export const SESSION_COOKIE_NOTE =
+  "Phiên làm việc dùng cookie HttpOnly và tự đóng khi hết thời gian không hoạt động.";

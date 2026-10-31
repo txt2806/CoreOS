@@ -1,155 +1,148 @@
-import { z } from "zod";
-const recordInput = z
-  .object({
-    code: z.string().trim().min(1).max(100),
-    name: z.string().trim().min(1).max(500),
-    scope: z.string().trim().max(250).default(""),
-    status: z.enum([
-      "Lên kế hoạch",
-      "Đang triển khai",
-      "Tạm dừng",
-      "Hoàn thành",
-    ]),
-    date: z.iso.date(),
-    assignee: z.string().trim().max(150).default(""),
-    note: z.string().trim().max(2000).default(""),
-  })
-  .strict();
-const recordPatch = recordInput
-  .omit({ scope: true, assignee: true, note: true })
-  .partial()
-  .extend({
-    scope: z.string().trim().max(250).optional(),
-    assignee: z.string().trim().max(150).optional(),
-    note: z.string().trim().max(2000).optional(),
-  });
-export const listQuery = z
-  .object({
-    page: z.coerce.number().int().min(1).max(100000).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(100),
-    q: z.string().trim().max(500).optional(),
-    scope: z.string().max(250).optional(),
-    status: z.string().max(150).optional(),
-    assignee: z.string().trim().max(150).optional(),
-  })
-  .strict();
-export const versionSchema = z
-  .object({ version: z.number().int().positive() })
-  .strict();
+/**
+ * Mirrors `apps/api/src/features/work-management/projects/project-spaces/dto/project-spaces.dto.ts`
+ * and `.../dto/sprints.dto.ts`. Field names, enum members and nullability follow
+ * the zod schemas exactly; nothing here is guessed.
+ */
+export const PROJECT_STATUSES = [
+  "Lên kế hoạch",
+  "Đang triển khai",
+  "Tạm dừng",
+  "Hoàn thành",
+] as const;
 
-export const fieldsSchema = z
-  .object({
-    team: z.string().trim().max(1000).optional(),
-    progress: z.number().int().min(0).max(100).optional(),
-    objective: z.string().trim().max(20000).optional(),
-    members: z.string().trim().max(1000).optional(),
-  })
-  .strict();
-export const createSchema = recordInput.extend({
-  fields: fieldsSchema.default({}),
-});
-export const updateSchema = recordPatch
-  .extend({
-    fields: fieldsSchema.optional(),
-    version: z.number().int().positive(),
-  })
-  .strict();
-export const recordSchema = createSchema.extend({
-  id: z.uuid(),
-  module: z.literal("projects"),
-  version: z.number().int().positive(),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
-});
-export type RecordInput = z.input<typeof createSchema>;
-export type RecordOutput = z.infer<typeof recordSchema>;
-export type RecordDto = RecordOutput;
-export type ListQuery = z.infer<typeof listQuery>;
+export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 
-/* Sprint planning: mirrors the contracts the API owns for a project board. */
+export interface ProjectFields {
+  team?: string;
+  progress?: number;
+  objective?: string;
+  members?: string;
+}
+
+export interface Project {
+  id: string;
+  module: "projects";
+  code: string;
+  name: string;
+  scope: string;
+  status: ProjectStatus;
+  date: string;
+  assignee: string;
+  note: string;
+  fields: ProjectFields;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectInput {
+  code: string;
+  name: string;
+  scope: string;
+  status: ProjectStatus;
+  date: string;
+  assignee: string;
+  note: string;
+  fields: ProjectFields;
+}
+
 export const SPRINT_STATUSES = ["PLANNED", "ACTIVE", "CLOSED"] as const;
 export type SprintStatus = (typeof SPRINT_STATUSES)[number];
 
-export const createSprintSchema = z
-  .object({
-    name: z.string().trim().min(1).max(200),
-    goal: z.string().trim().max(2000).default(""),
-    startDate: z.iso.date(),
-    endDate: z.iso.date(),
-    capacity: z.number().int().min(0).max(10000).default(0),
-    note: z.string().trim().max(2000).default(""),
-  })
-  .strict();
-export type NewSprint = z.input<typeof createSprintSchema>;
+export type CommitmentState = "EMPTY" | "UNDER" | "BALANCED" | "OVER";
 
-export const sprintTaskSchema = z.object({
-  taskId: z.uuid(),
-  code: z.string(),
-  name: z.string(),
-  status: z.string(),
-  assignee: z.string(),
-  done: z.boolean(),
-});
-export type SprintTask = z.infer<typeof sprintTaskSchema>;
+export interface Commitment {
+  capacity: number;
+  committed: number;
+  ratio: number;
+  overBy: number;
+  state: CommitmentState;
+}
 
-export const backlogItemSchema = z.object({
-  id: z.uuid(),
-  projectId: z.uuid(),
-  taskId: z.uuid(),
-  sprintId: z.uuid().nullable(),
-  rank: z.number().int(),
-  points: z.number().int(),
-  carriedFrom: z.uuid().nullable(),
-  carriedTimes: z.number().int(),
-  completedAt: z.iso.datetime().nullable(),
-  version: z.number().int().positive(),
-  task: sprintTaskSchema.nullable(),
-});
-export type BacklogItem = z.infer<typeof backlogItemSchema>;
+export interface SprintTask {
+  taskId: string;
+  code: string;
+  name: string;
+  status: string;
+  assignee: string;
+  done: boolean;
+}
 
-export const sprintSchema = z.object({
-  id: z.uuid(),
-  projectId: z.uuid(),
-  name: z.string(),
-  goal: z.string(),
-  status: z.enum(SPRINT_STATUSES),
-  startDate: z.iso.date(),
-  endDate: z.iso.date(),
-  capacity: z.number().int(),
-  committed: z.number().int(),
-  completed: z.number().int(),
-  carried: z.number().int(),
-  itemCount: z.number().int(),
-  doneCount: z.number().int(),
-  plannedPoints: z.number().int(),
-  donePoints: z.number().int(),
-  remainingPoints: z.number().int(),
-  daysLeft: z.number().int(),
-  committedOnPlan: z.boolean(),
-  activatedAt: z.iso.datetime().nullable(),
-  closedAt: z.iso.datetime().nullable(),
-  note: z.string(),
-  commitment: z.object({
-    capacity: z.number().int(),
-    committed: z.number().int(),
-    ratio: z.number(),
-    overBy: z.number().int(),
-    state: z.enum(["EMPTY", "UNDER", "BALANCED", "OVER"]),
-  }),
-  items: z.array(backlogItemSchema),
-  version: z.number().int().positive(),
-});
-export type Sprint = z.infer<typeof sprintSchema>;
+export interface BacklogItem {
+  id: string;
+  projectId: string;
+  taskId: string;
+  sprintId: string | null;
+  rank: number;
+  points: number;
+  carriedFrom: string | null;
+  carriedTimes: number;
+  completedAt: string | null;
+  version: number;
+  task: SprintTask | null;
+}
 
-export const boardSchema = z.object({
-  projectId: z.uuid(),
-  sprints: z.array(sprintSchema),
-  backlog: z.array(backlogItemSchema),
-  candidates: z.array(sprintTaskSchema),
-  velocity: z.object({
-    closedSprints: z.number().int(),
-    average: z.number(),
-    last: z.number(),
-  }),
-});
-export type Board = z.infer<typeof boardSchema>;
+export interface Sprint {
+  id: string;
+  projectId: string;
+  name: string;
+  goal: string;
+  status: SprintStatus;
+  startDate: string;
+  endDate: string;
+  capacity: number;
+  committed: number;
+  completed: number;
+  carried: number;
+  itemCount: number;
+  doneCount: number;
+  plannedPoints: number;
+  donePoints: number;
+  remainingPoints: number;
+  daysLeft: number;
+  committedOnPlan: boolean;
+  activatedAt: string | null;
+  closedAt: string | null;
+  note: string;
+  commitment: Commitment;
+  items: BacklogItem[];
+  version: number;
+}
+
+/** Shape of `GET /projects/:projectId/board`. */
+export interface SprintBoard {
+  projectId: string;
+  sprints: Sprint[];
+  backlog: BacklogItem[];
+  candidates: SprintTask[];
+  velocity: {
+    closedSprints: number;
+    average: number;
+    last: number;
+  };
+}
+
+/** Create payload for `POST /projects/:projectId/sprints`. */
+export interface SprintInput {
+  name: string;
+  goal: string;
+  startDate: string;
+  endDate: string;
+  capacity: number;
+  note: string;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}
+
+export type ProjectAction = "view" | "create" | "update" | "delete" | "approve";

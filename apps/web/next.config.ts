@@ -1,45 +1,10 @@
 import type { NextConfig } from "next";
-const nextConfig: NextConfig = {
+
+const config: NextConfig = {
+  reactStrictMode: true,
   poweredByHeader: false,
-  async redirects() {
-    return [
-      { source: "/home", destination: "/", permanent: false },
-      {
-        source: "/tasks",
-        destination: "/work-management/tasks",
-        permanent: false,
-      },
-      {
-        source: "/projects",
-        destination: "/work-management/projects",
-        permanent: false,
-      },
-      {
-        source: "/calendar",
-        destination: "/work-management/calendar",
-        permanent: false,
-      },
-      {
-        source: "/requests",
-        destination: "/work-management/tickets-approvals",
-        permanent: false,
-      },
-      {
-        source: "/messages",
-        destination: "/work-management/internal-chat",
-        permanent: false,
-      },
-      {
-        source: "/notes",
-        destination: "/work-management/knowledge-sop",
-        permanent: false,
-      },
-      {
-        source: "/reports",
-        destination: "/work-management/reports",
-        permanent: false,
-      },
-    ];
-  },
+  /** The web app never knows DATABASE_URL; it only proxies to the API origin. */
+  env: { API_ORIGIN: process.env.API_ORIGIN ?? "http://127.0.0.1:4000" },
 };
-export default nextConfig;
+
+export default config;

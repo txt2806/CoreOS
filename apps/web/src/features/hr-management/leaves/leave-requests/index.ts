@@ -1,5 +1,8 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/hr-management/leaves/leave-requests/components/entrypoints";
-export { definition } from "@/features/hr-management/leaves/leave-requests/constants";
+export { LeaveRequestsPage } from "./components/page";
+export type {
+  LeaveInput,
+  LeavePatch,
+  LeaveRequest,
+  LeaveStatus,
+  LeaveType,
+} from "./types";

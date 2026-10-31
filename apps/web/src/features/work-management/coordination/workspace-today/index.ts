@@ -1,5 +1,2 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/work-management/coordination/workspace-today/components/entrypoints";
-export { definition } from "@/features/work-management/coordination/workspace-today/constants";
+export { WorkspaceTodayPage } from "./components/page";
+export type { Attendance, InboxEntry, Notice, TodayTask } from "./types";

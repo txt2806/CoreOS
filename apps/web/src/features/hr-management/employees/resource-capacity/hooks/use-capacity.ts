@@ -1,145 +1,196 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
-import { client } from "@/features/hr-management/employees/resource-capacity/api/client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ApiError,
+  actionsOf,
+  capacityDetail,
+  createPeriod,
+  listPeriods,
+  permissionsMe,
+  type PeriodListQuery,
+} from "../api/client";
+import { DEFAULT_PAGE_SIZE, FEATURE_KEY } from "../constants";
 import type {
-  AllocationDto,
-  PeriodDto,
-  Workload,
-} from "@/features/hr-management/employees/resource-capacity/types";
+  CapacitySummary,
+  PageResult,
+  Period,
+  PeriodInput,
+  PermissionSnapshot,
+} from "../types";
 
-const event = "oneops-capacity-changed";
-
-export function capacityChanged() {
-  window.dispatchEvent(new Event(event));
+export interface Feedback {
+  tone: "success" | "error" | "warning" | "info";
+  message: string;
+  hint?: string;
 }
 
-function useReload() {
-  const [revision, setRevision] = useState(0);
-  const reload = useCallback(() => setRevision((value) => value + 1), []);
-  useEffect(() => {
-    window.addEventListener(event, reload);
-    return () => window.removeEventListener(event, reload);
-  }, [reload]);
-  return { revision, reload };
-}
+const EMPTY: PageResult<Period> = {
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize: DEFAULT_PAGE_SIZE,
+};
 
-export function usePeriods(params: Record<string, string>) {
-  const [state, setState] = useState<{
-    items: PeriodDto[];
-    total: number;
-    loading: boolean;
-    error: string;
-  }>({ items: [], total: 0, loading: true, error: "" });
-  const { revision, reload } = useReload();
-  const key = JSON.stringify(params);
+/**
+ * Owns the period list, its filters, the permission snapshot and the capacity
+ * numbers. The list endpoint returns raw period inputs only, so each loaded row
+ * is completed with its own `/summary` read.
+ */
+export function useCapacity() {
+  const [query, setQuery] = useState<PeriodListQuery>({
+    page: 1,
+    pageSize: DEFAULT_PAGE_SIZE,
+    q: "",
+    from: "",
+    to: "",
+  });
+  const [term, setTerm] = useState("");
+  const [data, setData] = useState<PageResult<Period>>(EMPTY);
+  const [summaries, setSummaries] = useState<Record<string, CapacitySummary>>({});
+  const [summariesLoading, setSummariesLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [permission, setPermission] = useState<PermissionSnapshot | null>(null);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [tick, setTick] = useState(0);
+  const requestId = useRef(0);
+
+  /* Typing must not fire a request per keystroke. */
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setTerm(query.q ?? "");
+      setQuery((current) => (current.page === 1 ? current : { ...current, page: 1 }));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [query.q]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    client
-      .listPeriods(JSON.parse(key) as Record<string, string>, controller.signal)
-      .then((result) =>
-        setState({
-          items: result.items,
-          total: result.total,
-          loading: false,
-          error: "",
-        }),
-      )
-      .catch((error) => {
-        if (!controller.signal.aborted)
-          setState({
-            items: [],
-            total: 0,
-            loading: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Không tải được kỳ công suất",
-          });
+    const id = ++requestId.current;
+    setLoading(true);
+    setError(null);
+    listPeriods({ ...query, q: term })
+      .then((result) => {
+        if (id !== requestId.current) return;
+        setData(result);
+      })
+      .catch((caught: unknown) => {
+        if (id !== requestId.current) return;
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError(0, "Không tải được danh sách kỳ công suất."),
+        );
+      })
+      .finally(() => {
+        if (id === requestId.current) setLoading(false);
       });
-    return () => controller.abort();
-  }, [key, revision]);
+  }, [query, term, tick]);
 
-  return { ...state, reload };
-}
-
-export function useAllocations(params: Record<string, string>) {
-  const [state, setState] = useState<{
-    items: AllocationDto[];
-    total: number;
-    loading: boolean;
-    error: string;
-  }>({ items: [], total: 0, loading: true, error: "" });
-  const { revision, reload } = useReload();
-  const key = JSON.stringify(params);
+  /**
+   * One summary per visible period. A failed read only weakens that row's
+   * utilisation cell; it must not turn the whole board into an error.
+   */
+  useEffect(() => {
+    const items = data.items;
+    if (items.length === 0) {
+      setSummaries({});
+      return;
+    }
+    let cancelled = false;
+    setSummariesLoading(true);
+    Promise.allSettled(items.map((period) => capacityDetail(period.id)))
+      .then((results) => {
+        if (cancelled) return;
+        const next: Record<string, CapacitySummary> = {};
+        for (const result of results) {
+          if (result.status === "fulfilled") next[result.value.summary.periodId] = result.value.summary;
+        }
+        setSummaries(next);
+      })
+      .finally(() => {
+        if (!cancelled) setSummariesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    client
-      .listAllocations(
-        JSON.parse(key) as Record<string, string>,
-        controller.signal,
-      )
-      .then((result) =>
-        setState({
-          items: result.items,
-          total: result.total,
-          loading: false,
-          error: "",
-        }),
-      )
-      .catch((error) => {
-        if (!controller.signal.aborted)
-          setState({
-            items: [],
-            total: 0,
-            loading: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Không tải được phân bổ dự án",
-          });
+    let cancelled = false;
+    permissionsMe()
+      .then((body) => {
+        if (cancelled) return;
+        setPermission({
+          role: body.role,
+          isSystemAdmin: body.isSystemAdmin,
+          actions: actionsOf(body, FEATURE_KEY),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPermission({ role: "EMPLOYEE", isSystemAdmin: false, actions: [] });
+        }
       });
-    return () => controller.abort();
-  }, [key, revision]);
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
 
-  return { ...state, reload };
-}
+  const reload = useCallback(() => setTick((value) => value + 1), []);
 
-export function useWorkload(periodId: string) {
-  // Dữ liệu gắn với kỳ đã tải để đổi kỳ không hiển thị số liệu cũ.
-  const [entry, setEntry] = useState<{
-    key: string;
-    data: Workload | null;
-    error: string;
-  }>({ key: "", data: null, error: "" });
-  const { revision, reload } = useReload();
+  const can = useCallback(
+    (action: string) => permission?.actions.includes(action) ?? false,
+    [permission],
+  );
 
-  useEffect(() => {
-    if (!periodId) return;
-    const controller = new AbortController();
-    client
-      .workload(periodId, controller.signal)
-      .then((data) => setEntry({ key: periodId, data, error: "" }))
-      .catch((error) => {
-        if (!controller.signal.aborted)
-          setEntry({
-            key: periodId,
-            data: null,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Không tính được công suất",
-          });
+  const patchQuery = useCallback((patch: Partial<PeriodListQuery>) => {
+    setQuery((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setQuery((current) => ({ ...current, q: "", from: "", to: "", page: 1 }));
+  }, []);
+
+  const create = useCallback(
+    async (input: PeriodInput) => {
+      const created = await createPeriod(input);
+      setFeedback({
+        tone: "success",
+        message: `Đã tạo kỳ công suất cho ${created.employeeName}.`,
+        hint: "Mở kỳ để phân bổ dự án và xem công suất còn trống.",
       });
-    return () => controller.abort();
-  }, [periodId, revision]);
+      reload();
+      return created;
+    },
+    [reload],
+  );
 
-  const ready = Boolean(periodId) && entry.key === periodId;
+  const filtersActive = Boolean(term || query.from || query.to);
+
+  const result = useMemo(
+    () => ({
+      data,
+      summaries,
+      summariesLoading,
+      loading,
+      error,
+      permission,
+      feedback,
+      filtersActive,
+    }),
+    [data, summaries, summariesLoading, loading, error, permission, feedback, filtersActive],
+  );
+
   return {
-    data: ready ? entry.data : null,
-    loading: Boolean(periodId) && !ready,
-    error: ready ? entry.error : "",
+    ...result,
+    query,
+    term,
+    patchQuery,
+    clearFilters,
     reload,
+    can,
+    create,
+    setFeedback,
   };
 }

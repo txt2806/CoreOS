@@ -1,5 +1,6 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/work-management/projects/project-spaces/components/entrypoints";
-export { definition } from "@/features/work-management/projects/project-spaces/constants";
+/**
+ * Public surface for the project spaces module. Other features and the route
+ * page import from here only; nothing else in this folder is shared.
+ */
+export { ProjectSpacesPage } from "./components/page";
+export type { Project, ProjectStatus, Sprint, SprintBoard } from "./types";

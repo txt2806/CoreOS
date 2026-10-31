@@ -1,378 +1,511 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type { RecordDto } from "@/features/work-management/projects/project-spaces/types";
-import { definition } from "@/features/work-management/projects/project-spaces/constants";
-import { client } from "@/features/work-management/projects/project-spaces/api/client";
-import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/projects/project-spaces/hooks/use-records";
-import {
-  Modal,
-  useWorkspace,
-} from "@/features/work-management/projects/project-spaces/components/primitives/workspace";
-import { Button } from "@/features/work-management/projects/project-spaces/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/work-management/projects/project-spaces/components/primitives/forms";
-import { Badge } from "@/features/work-management/projects/project-spaces/components/primitives/foundations";
-import { RecordForm } from "@/features/work-management/projects/project-spaces/components/record-form";
-import { SprintBoard } from "@/features/work-management/projects/project-spaces/components/sprint-board";
-import styles from "@/features/work-management/projects/project-spaces/components/styles.module.css";
 
-type View = "cards" | "list" | "sprint";
+import { useEffect, useMemo, useState } from "react";
+import { EXPORT_FILE_PREFIX } from "../constants";
+import { downloadCsv, formatDate, today } from "../format";
+import { useProjects, type Feedback } from "../hooks/use-projects";
+import { PROJECT_STATUSES, type Project } from "../types";
+import { CreateProjectDialog } from "./create-dialog";
+import { ProjectDetailSheet } from "./detail-sheet";
+import {
+  CloseGlyph,
+  DownloadGlyph,
+  Pagination,
+  PlusGlyph,
+  ProgressCell,
+  SearchGlyph,
+  StatusBadge,
+} from "./primitives";
+import {
+  ALL_COLUMNS,
+  COLUMN_LABELS,
+  OPTIONAL_COLUMNS,
+  ProjectTable,
+  nextSort,
+  sortProjects,
+  type ColumnKey,
+  type SortState,
+} from "./table";
 
-export function ModulePage() {
-  const params = useSearchParams();
-  const { openCreate, notify } = useWorkspace();
-  const { records, loading, error, reload } = useModuleRecords();
-  const [query, setQuery] = useState(params.get("q") || "");
-  const [status, setStatus] = useState("");
-  const [detail, setDetail] = useState<RecordDto | null>(null),
-    [editing, setEditing] = useState<RecordDto | null>(null),
-    [deleting, setDeleting] = useState<RecordDto | null>(null),
-    [pending, setPending] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [view, setView] = useState<View>("cards");
-  const effectiveStatus =
-    status === "all" ? "" : status || params.get("status") || "";
-  const filtered = records.filter(
-    (record) =>
-      (!effectiveStatus || record.status === effectiveStatus) &&
-      `${record.code} ${record.name} ${record.assignee} ${record.note} ${Object.values(record.fields).join(" ")}`
-        .toLocaleLowerCase("vi")
-        .includes(query.trim().toLocaleLowerCase("vi")),
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+function share(value: number, total: number): string {
+  if (!total) return "chưa có dữ liệu";
+  return `${Math.round((value / total) * 100)}% trên tổng`;
+}
+
+export function ProjectSpacesPage() {
+  const projects = useProjects();
+  const [view, setView] = useState<"table" | "cards">("table");
+  const [sort, setSort] = useState<SortState>({ key: "date", dir: "asc" });
+  const [hidden, setHidden] = useState<ColumnKey[]>(["members"]);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const rows = useMemo(
+    () => sortProjects(projects.data.items, sort),
+    [projects.data.items, sort],
   );
-  async function update(
-    record: RecordDto,
-    patch: Parameters<typeof client.update>[1],
-  ) {
-    if (pending) return false;
-    setPending(true);
-    setActionError("");
-    try {
-      const next = await client.update(record, patch);
-      setDetail((current) => (current?.id === next.id ? next : current));
-      recordsChanged();
-      notify("Đã cập nhật thành công.");
-      return true;
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Không thể cập nhật");
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }
-  function exportCsv() {
-    const cell = (value: string) =>
-      '"' +
-      (/^[=+@-]/.test(value) ? "'" : "") +
-      value.replaceAll('"', '""') +
-      '"';
-    const csv = [
-      [
-        "Mã",
-        "Tiêu đề",
-        "Trạng thái",
-        definition.dateLabel,
-        definition.personLabel,
-      ],
-      ...filtered.map((r) => [r.code, r.name, r.status, r.date, r.assignee]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
+
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const close = () => setColumnsOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setColumnsOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [columnsOpen]);
+
+  const toggleColumn = (key: ColumnKey) => {
+    setHidden((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "projects.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+  };
+
+  const exportRows = (list: Project[]) => {
+    const header = [
+      "Mã",
+      "Dự án",
+      "Phạm vi",
+      "Trạng thái",
+      "Quản lý",
+      "Mốc thời gian",
+      "Tiến độ",
+      "Nhóm",
+      "Thành viên",
+      "Cập nhật",
+    ];
+    const body = list.map((project) => [
+      project.code,
+      project.name,
+      project.scope,
+      project.status,
+      project.assignee,
+      formatDate(project.date),
+      typeof project.fields.progress === "number" ? `${project.fields.progress}%` : "",
+      project.fields.team ?? "",
+      project.fields.members ?? "",
+      formatDate(project.updatedAt),
+    ]);
+    downloadCsv(`${EXPORT_FILE_PREFIX}-${today()}.csv`, [header, ...body]);
+    projects.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${list.length} dòng ra tệp CSV.`,
+    });
+  };
+
+  const detail = openId
+    ? (projects.data.items.find((project) => project.id === openId) ?? null)
+    : null;
+  const total = projects.data.total;
+  const sums = Object.values(projects.totals);
+  const all = sums.reduce((sum, value) => sum + value, 0);
+  const forbidden = projects.error?.status === 403;
 
   return (
-    <div className={styles.root}>
-      <div className="module-view">
-        <section className="records-panel">
-          <div className={styles.header}>
-            <div>
-              <h1>{definition.title}</h1>
-              <p>Tập trung mục tiêu, người phụ trách và tiến độ dự án.</p>
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Quản lý dự án</p>
+          <h1>Không gian dự án</h1>
+          <p className="page-lede">
+            Mỗi dự án gắn một quản lý, một nhóm và các sprint có cam kết điểm. Trạng thái
+            dự án phản ánh giai đoạn thực tế, không phải mức ưu tiên.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => exportRows(rows)}
+            disabled={rows.length === 0}
+            title="Xuất các dòng đang hiển thị ra CSV"
+          >
+            <DownloadGlyph /> Xuất CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setCreating(true)}
+            disabled={!projects.can("create")}
+            title={
+              projects.can("create")
+                ? "Tạo dự án mới"
+                : "Bạn không có quyền tạo dự án"
+            }
+          >
+            <PlusGlyph /> Tạo dự án
+          </button>
+        </div>
+      </header>
+
+      {sums.length > 0 ? (
+        <section className="metric-strip" aria-label="Số lượng dự án theo trạng thái">
+          <div className="metric">
+            <span className="metric-value tabular">
+              {(projects.totals["Lên kế hoạch"] ?? 0).toLocaleString("vi-VN")}
+            </span>
+            <span className="metric-label">Lên kế hoạch</span>
+            <span className="metric-note">
+              {share(projects.totals["Lên kế hoạch"] ?? 0, all)}
+            </span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">
+              {(projects.totals["Đang triển khai"] ?? 0).toLocaleString("vi-VN")}
+            </span>
+            <span className="metric-label">Đang triển khai</span>
+            <span className="metric-note">
+              {share(projects.totals["Đang triển khai"] ?? 0, all)}
+            </span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">
+              {(projects.totals["Tạm dừng"] ?? 0).toLocaleString("vi-VN")}
+            </span>
+            <span className="metric-label">Tạm dừng</span>
+            <span className="metric-note">
+              {(projects.totals["Tạm dừng"] ?? 0) > 0
+                ? "cần rà soát nguồn lực"
+                : "không có dự án treo"}
+            </span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">
+              {(projects.totals["Hoàn thành"] ?? 0).toLocaleString("vi-VN")}
+            </span>
+            <span className="metric-label">Hoàn thành</span>
+            <span className="metric-note">
+              {share(projects.totals["Hoàn thành"] ?? 0, all)}
+            </span>
+          </div>
+        </section>
+      ) : null}
+
+      {projects.feedback ? (
+        <div className={ALERT_TONE[projects.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{projects.feedback.message}</span>
+            {projects.feedback.hint ? (
+              <span className="muted">{projects.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => projects.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="project-search"
+                  className="input"
+                  type="search"
+                  value={projects.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo mã, tên, phạm vi…"
+                  aria-label="Tìm dự án"
+                  onChange={(event) =>
+                    projects.patchQuery({ q: event.target.value, page: 1 })
+                  }
+                />
+                {projects.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => projects.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={projects.query.status ?? ""}
+                aria-label="Lọc theo trạng thái"
+                onChange={(event) =>
+                  projects.patchQuery({
+                    status: event.target.value as Project["status"] | "",
+                    page: 1,
+                  })
+                }
+                style={{ width: 176 }}
+              >
+                <option value="">Mọi trạng thái</option>
+                {PROJECT_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+
+              <div className="popover-anchor">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-expanded={columnsOpen}
+                  aria-haspopup="true"
+                  onClick={() => setColumnsOpen((open) => !open)}
+                >
+                  Cột hiển thị
+                </button>
+                {columnsOpen ? (
+                  <div className="menu" role="group" aria-label="Chọn cột hiển thị">
+                    {OPTIONAL_COLUMNS.map((key) => (
+                      <label key={key} className="menu-item">
+                        <input
+                          type="checkbox"
+                          checked={!hidden.includes(key)}
+                          onChange={() => toggleColumn(key)}
+                        />
+                        {COLUMN_LABELS[key]}
+                      </label>
+                    ))}
+                    <button
+                      type="button"
+                      className="menu-item"
+                      onClick={() => setHidden([])}
+                    >
+                      Hiện tất cả {ALL_COLUMNS.length} cột
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <div className={styles.actions}>
-              <Button variant="secondary" onClick={exportCsv}>
-                Xuất CSV
-              </Button>
-              <Button onClick={openCreate}>Tạo mới</Button>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {total.toLocaleString("vi-VN")} dự án
+                {projects.filtersActive ? ` · ${rows.length} dòng khớp` : ""}
+              </span>
+              <div className="segmented" role="group" aria-label="Kiểu hiển thị">
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={view === "table"}
+                  onClick={() => setView("table")}
+                >
+                  Bảng
+                </button>
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={view === "cards"}
+                  onClick={() => setView("cards")}
+                >
+                  Thẻ
+                </button>
+              </div>
             </div>
           </div>
 
-          <div className={styles.toolbar}>
-            {view !== "sprint" && (
-              <>
-                <Input
-                  aria-label="Tìm kiếm"
-                  placeholder={"Tìm " + definition.singular + "…"}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-                <Select
-                  aria-label="Lọc trạng thái"
-                  value={effectiveStatus}
-                  onChange={(e) => setStatus(e.target.value || "all")}
-                >
-                  <option value="">Tất cả trạng thái</option>
-                  {definition.statuses.map((s) => (
-                    <option key={s}>{s}</option>
-                  ))}
-                </Select>
-              </>
-            )}
-            <Button
-              variant={view === "list" ? "primary" : "secondary"}
-              onClick={() => setView("list")}
+          {projects.filtersActive ? (
+            <div
+              className="row wrap items-center gap-2"
+              style={{ paddingTop: "var(--space-3)" }}
             >
-              Danh sách
-            </Button>
-            <Button
-              variant={view === "cards" ? "primary" : "secondary"}
-              onClick={() => setView("cards")}
-            >
-              Thẻ
-            </Button>
-            <Button
-              variant={view === "sprint" ? "primary" : "secondary"}
-              onClick={() => setView("sprint")}
-            >
-              Sprint
-            </Button>
-            {view !== "sprint" && (
-              <span className="text-sm text-muted-foreground">
-                {filtered.length} mục
-              </span>
-            )}
-          </div>
-          {(error || actionError) && (
-            <div role="alert" className="error">
-              {error || actionError}
-              <Button variant="ghost" onClick={reload}>
-                Thử lại
-              </Button>
+              {projects.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{projects.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => projects.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {projects.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {projects.query.status}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => projects.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={projects.clearFilters}
+              >
+                Xoá bộ lọc
+              </button>
             </div>
-          )}
-          {loading ? (
-            <p role="status">Đang tải dữ liệu…</p>
-          ) : view === "sprint" ? (
-            <SprintBoard projects={records} />
-          ) : !filtered.length ? (
-            <div className={styles.empty}>
-              <h2>Chưa có {definition.singular} phù hợp</h2>
-              <p>Tạo nội dung đầu tiên hoặc thay đổi điều kiện tìm kiếm.</p>
-              <Button onClick={openCreate}>Tạo mới</Button>
-            </div>
-          ) : (
-            <>
-              {view === "list" ? (
-                <div className={styles.scroll}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Mã</th>
-                        <th>Tiêu đề</th>
-                        <th>Trạng thái</th>
-                        <th>{definition.dateLabel}</th>
-                        <th>{definition.personLabel}</th>
-                        <th>Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((record) => (
-                        <tr key={record.id}>
-                          <td>{record.code}</td>
-                          <td>
-                            <button
-                              className="font-medium"
-                              onClick={() => setDetail(record)}
-                            >
-                              {record.name}
-                            </button>
-                          </td>
-                          <td>
-                            <Select
-                              aria-label={"Trạng thái " + record.code}
-                              disabled={pending}
-                              value={record.status}
-                              onChange={(e) =>
-                                void update(record, {
-                                  status: e.target.value as RecordDto["status"],
-                                })
-                              }
-                            >
-                              {definition.statuses.map((s) => (
-                                <option key={s}>{s}</option>
-                              ))}
-                            </Select>
-                          </td>
-                          <td>{record.date}</td>
-                          <td>{record.assignee || "Chưa phân công"}</td>
-                          <td>
-                            <div className={styles.actions}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditing(record)}
-                              >
-                                Sửa
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleting(record)}
-                              >
-                                Xóa
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className={styles.grid}>
-                  {filtered.map((record) => (
-                    <article className={styles.card} key={record.id}>
-                      <div className={styles.meta}>
-                        <span>{record.code}</span>
-                        <Badge>{record.status}</Badge>
-                      </div>
-                      <h3>
-                        <button
-                          type="button"
-                          className={styles.titleLink}
-                          onClick={() => setDetail(record)}
-                        >
-                          {record.name}
-                        </button>
-                      </h3>
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {record.note}
-                      </p>
-                      <div className={styles.meta}>
-                        <span>{record.assignee || "Chưa phân công"}</span>
-                        <span>{record.date}</span>
-                      </div>
-                      <div className={styles.actions}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditing(record)}
-                        >
-                          Sửa
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDeleting(record)}
-                        >
-                          Xóa
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-      {detail && (
-        <Modal title={detail.name} onClose={() => setDetail(null)}>
-          <div className={styles.details}>
-            <Badge>{detail.status}</Badge>
-            <p>
-              <strong>{detail.code}</strong> · {detail.date} ·{" "}
-              {detail.assignee || "Chưa phân công"}
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem dự án</span>
+            <p className="empty-body">
+              Yêu cầu quản trị hệ thống cấp quyền “Xem” cho phân hệ Không gian dự án rồi
+              tải lại trang.
             </p>
-            <p>{detail.note || "Chưa có mô tả."}</p>
-            {Object.entries(detail.fields)
-              .filter(([, value]) => !Array.isArray(value))
-              .map(([key, value]) => (
-                <p key={key}>
-                  <strong>
-                    {definition.fields.find((field) => field.key === key)
-                      ?.label || key}
-                    :{" "}
-                  </strong>
-                  {String(value)}
-                </p>
-              ))}
+            <button type="button" className="btn btn-ghost" onClick={projects.reload}>
+              Tải lại
+            </button>
           </div>
-          <footer>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setEditing(detail);
-                setDetail(null);
-              }}
-            >
-              Chỉnh sửa
-            </Button>
-            <Button onClick={() => setDetail(null)}>Đóng</Button>
-          </footer>
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={"Chỉnh sửa " + definition.singular}
-          onClose={() => setEditing(null)}
-        >
-          <RecordForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {deleting && (
-        <Modal title="Xác nhận xóa" onClose={() => setDeleting(null)}>
-          <div className="form-body">
-            <p>Bạn muốn xóa “{deleting.name}”?</p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
+        ) : projects.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách dự án</span>
+            <p className="empty-body">{projects.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={projects.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : !projects.loading && rows.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {projects.filtersActive
+                ? "Không có dự án nào khớp bộ lọc"
+                : "Chưa có dự án nào"}
+            </span>
+            <p className="empty-body">
+              {projects.filtersActive
+                ? "Thử bỏ một vài điều kiện, hoặc xoá hết bộ lọc để xem toàn bộ danh sách."
+                : "Tạo dự án đầu tiên để gắn quản lý, nhóm và các sprint có cam kết điểm."}
+            </p>
+            {projects.filtersActive ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={projects.clearFilters}
+              >
+                Xoá bộ lọc
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setCreating(true)}
+                disabled={!projects.can("create")}
+              >
+                <PlusGlyph /> Tạo dự án
+              </button>
             )}
           </div>
-          <footer>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={pending}
-              onClick={async () => {
-                if (pending) return;
-                setPending(true);
-                setActionError("");
-                try {
-                  await client.remove(deleting);
-                  recordsChanged();
-                  setDeleting(null);
-                  notify("Đã xóa thành công.");
-                } catch (e) {
-                  setActionError(
-                    e instanceof Error ? e.message : "Không thể xóa",
-                  );
-                } finally {
-                  setPending(false);
-                }
-              }}
-            >
-              Xóa
-            </Button>
-          </footer>
-        </Modal>
-      )}
+        ) : view === "table" ? (
+          <ProjectTable
+            projects={rows}
+            loading={projects.loading}
+            sort={sort}
+            onSort={(key) => setSort((current) => nextSort(current, key))}
+            hidden={hidden}
+            onOpen={(project) => setOpenId(project.id)}
+          />
+        ) : (
+          <div className="surface-body">
+            <div className="bento">
+              {rows.map((project) => (
+                <article key={project.id} className="widget bento-4">
+                  <div className="widget-head">
+                    <div className="stack gap-1" style={{ minWidth: 0 }}>
+                      <span className="eyebrow mono">{project.code}</span>
+                      <h2 className="widget-title truncate">{project.name}</h2>
+                      <span className="muted truncate">
+                        {project.fields.team || project.scope || "Chưa gắn nhóm"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="widget-body">
+                    <div className="row wrap items-center gap-2">
+                      <StatusBadge status={project.status} />
+                      <span className="muted tabular">
+                        {formatDate(project.date)}
+                      </span>
+                    </div>
+                    <ProgressCell value={project.fields.progress} />
+                    <span className="muted truncate">
+                      Quản lý: {project.assignee || "Chưa chỉ định"}
+                    </span>
+                  </div>
+                  <div className="widget-foot">
+                    <span className="muted">
+                      {project.fields.members
+                        ? `${project.fields.members.split(",").filter((item) => item.trim()).length.toLocaleString("vi-VN")} thành viên`
+                        : "Chưa có thành viên"}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setOpenId(project.id)}
+                      aria-label={`Mở chi tiết dự án ${project.name}`}
+                    >
+                      Mở chi tiết
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!forbidden && !projects.error && rows.length > 0 ? (
+          <Pagination
+            page={projects.query.page}
+            pageSize={projects.query.pageSize}
+            total={total}
+            idPrefix="project"
+            onPage={(page) => projects.patchQuery({ page })}
+            onPageSize={(pageSize) => projects.patchQuery({ pageSize, page: 1 })}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Sắp xếp và tìm kiếm áp dụng cho các dòng đang tải trên trang này. Sprint, cam kết
+        năng lực và backlog nằm trong trang chi tiết của từng dự án.
+      </p>
+
+      {creating ? (
+        <CreateProjectDialog onCreate={projects.create} onClose={() => setCreating(false)} />
+      ) : null}
+
+      {detail ? (
+        <ProjectDetailSheet
+          project={detail}
+          permission={projects.permission}
+          canUpdate={projects.can("update")}
+          canDelete={projects.can("delete")}
+          onSave={(values) =>
+            projects.patch(detail.id, { ...values, version: detail.version })
+          }
+          onDelete={() => projects.remove(detail)}
+          onChanged={projects.reload}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
     </div>
   );
 }

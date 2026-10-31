@@ -1,5 +1,10 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/hr-management/organization/positions-grades/components/entrypoints";
-export { definition } from "@/features/hr-management/organization/positions-grades/constants";
+export { PositionsGradesPage } from "./components/page";
+export type {
+  Grade,
+  GradeInput,
+  GradePatch,
+  OrgStatus,
+  Position,
+  PositionInput,
+  PositionPatch,
+} from "./types";

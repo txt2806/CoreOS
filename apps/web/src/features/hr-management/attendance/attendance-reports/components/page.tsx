@@ -1,446 +1,682 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type {
-  LineDto,
-  PeriodDto,
-} from "@/features/hr-management/attendance/attendance-reports/types";
+
+import { useMemo, useState } from "react";
 import {
-  definition,
-  statusLabels,
-} from "@/features/hr-management/attendance/attendance-reports/constants";
-import { client } from "@/features/hr-management/attendance/attendance-reports/api/client";
+  EXPORT_FILE_PREFIX,
+  PERIOD_STATUS_HINT,
+  PERIOD_STATUS_LABEL,
+  PERIOD_STATUS_TONE,
+  UNAVAILABLE_METRICS,
+} from "../constants";
 import {
-  attendanceReportsChanged,
-  useLines,
-  usePeriods,
-  useSummary,
-} from "@/features/hr-management/attendance/attendance-reports/hooks/use-attendance-reports";
+  downloadCsv,
+  formatDate,
+  formatDateTime,
+  formatPeriodKey,
+  numberLabel,
+  todayIso,
+} from "../format";
+import { useAttendanceReports } from "../hooks/use-attendance-reports";
 import {
-  LineForm,
-  PeriodForm,
-} from "@/features/hr-management/attendance/attendance-reports/components/report-forms";
+  PERIOD_STATUSES,
+  type AttendancePeriod,
+  type PeriodLine,
+  type PeriodStatus,
+} from "../types";
+import { LineDialog } from "./line-form";
+import { PeriodDialog } from "./period-form";
 import {
-  Badge,
-  Button,
-  ErrorLine,
-  Input,
-  Modal,
-  Select,
-} from "@/features/hr-management/attendance/attendance-reports/components/primitives/ui";
+  CloseGlyph,
+  DownloadGlyph,
+  LockGlyph,
+  Pagination,
+  PlusGlyph,
+  RefreshGlyph,
+  SearchGlyph,
+  SkeletonRows,
+  SortButton,
+  StatusBadge,
+  UnlockGlyph,
+} from "./primitives";
 
-type Tab = "periods" | "lines";
+const ALERT_TONE = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+} as const;
 
-const tabs: { key: Tab; label: string }[] = [
-  { key: "periods", label: "Kỳ công" },
-  { key: "lines", label: "Bảng công" },
-];
+type SortKey = "employeeName" | "workedDays" | "overtimeHours";
 
-function PeriodsTab({
-  notify,
-  onOpenLines,
-}: {
-  notify: (message: string) => void;
-  onOpenLines: (periodId: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<PeriodDto | null>(null);
-  const [pendingId, setPendingId] = useState("");
-  const [actionError, setActionError] = useState("");
+export function AttendanceReportsPage() {
+  const report = useAttendanceReports();
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "employeeName",
+    dir: "asc",
+  });
+  const [periodDialog, setPeriodDialog] = useState<{ record?: AttendancePeriod } | null>(null);
+  const [lineDialog, setLineDialog] = useState<{ record?: PeriodLine } | null>(null);
 
-  const filters: Record<string, string> = {};
-  if (query.trim()) filters.q = query.trim();
-  const { items, total, loading, error, reload } = usePeriods(filters);
+  const rows = useMemo(() => {
+    const factor = sort.dir === "asc" ? 1 : -1;
+    const value = (line: PeriodLine): number | string => {
+      if (sort.key === "workedDays") return line.workedDays;
+      if (sort.key === "overtimeHours") return line.overtimeHours;
+      return line.employeeName;
+    };
+    return [...report.lines.items].sort((left, right) => {
+      const a = value(left);
+      const b = value(right);
+      if (typeof a === "number" && typeof b === "number") return factor * (a - b);
+      return factor * String(a).localeCompare(String(b), "vi");
+    });
+  }, [report.lines.items, sort]);
 
-  async function toggle(record: PeriodDto) {
-    if (pendingId) return;
-    setPendingId(record.id);
-    setActionError("");
-    try {
-      const status = record.status === "DRAFT" ? "CLOSED" : "DRAFT";
-      await client.updatePeriod(record, { status });
-      attendanceReportsChanged();
-      notify(
-        status === "CLOSED"
-          ? "Đã chốt kỳ công."
-          : "Đã mở lại kỳ công để chỉnh sửa.",
-      );
-    } catch (cause) {
-      setActionError(
-        cause instanceof Error ? cause.message : "Không thể đổi trạng thái",
-      );
-    } finally {
-      setPendingId("");
-    }
-  }
+  const toggleSort = (key: SortKey) =>
+    setSort((current) =>
+      current.key === key
+        ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" },
+    );
+
+  const ariaSort = (key: SortKey): "ascending" | "descending" | "none" =>
+    sort.key !== key ? "none" : sort.dir === "asc" ? "ascending" : "descending";
+
+  const forbidden =
+    report.periodError?.status === 403 || report.lineError?.status === 403;
+  const canCreate = report.can("create");
+  const canUpdate = report.can("update");
+  const summary = report.summary;
+
+  const exportRows = () => {
+    const period = report.selected;
+    const header = [
+      "Kỳ công",
+      "Nhân sự",
+      "Mã nhân sự",
+      "Ngày công",
+      "Nghỉ có lương",
+      "Nghỉ không lương",
+      "Giờ làm thêm",
+      "Ghi chú",
+    ];
+    const body = rows.map((line) => [
+      period ? period.periodKey : "",
+      line.employeeName,
+      line.employeeId,
+      numberLabel(line.workedDays, 2),
+      numberLabel(line.paidLeaveDays, 2),
+      numberLabel(line.unpaidLeaveDays, 2),
+      numberLabel(line.overtimeHours, 2),
+      line.note,
+    ]);
+    downloadCsv(
+      `${EXPORT_FILE_PREFIX}-${period?.periodKey ?? todayIso()}.csv`,
+      [header, ...body],
+    );
+    report.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${rows.length} dòng công đang hiển thị ra tệp CSV.`,
+      hint: "Tệp chỉ chứa trang hiện tại; đổi số dòng mỗi trang nếu cần xuất nhiều hơn.",
+    });
+  };
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="flex flex-wrap items-end gap-2">
-          <Input
-            aria-label="Tìm kỳ công"
-            placeholder="Tìm theo tên hoặc kỳ…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="sm:w-56"
-          />
-          <span className="text-sm text-muted-foreground">
-            {items.length}/{total} kỳ
-          </span>
-        </div>
-        <Button size="sm" onClick={() => setCreating(true)}>
-          Tạo kỳ công
-        </Button>
-      </div>
-      {(error || actionError) && (
-        <ErrorLine message={error || actionError} retry={reload} />
-      )}
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải kỳ công…
-        </p>
-      ) : !items.length ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h2 className="text-sm font-semibold">Chưa có kỳ công</h2>
-          <p className="text-sm text-muted-foreground">
-            Tạo kỳ công theo tháng để tổng hợp ngày công, nghỉ phép và tăng ca.
-          </p>
-          <Button size="sm" onClick={() => setCreating(true)}>
-            Tạo kỳ công
-          </Button>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((period) => (
-            <li
-              key={period.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-surface p-3"
-            >
-              <div className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  {period.name}{" "}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {period.periodKey}
-                  </span>
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  {period.fromDate} → {period.toDate} · {period.lineCount} dòng
-                  công{period.note ? ` · ${period.note}` : ""}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={period.status === "CLOSED" ? "neutral" : "info"}>
-                  {statusLabels[period.status]}
-                </Badge>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onOpenLines(period.id)}
-                >
-                  Bảng công
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setEditing(period)}
-                >
-                  Sửa
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={pendingId === period.id}
-                  onClick={() => void toggle(period)}
-                >
-                  {period.status === "DRAFT" ? "Chốt" : "Mở lại"}
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {creating && (
-        <Modal title="Tạo kỳ công" onClose={() => setCreating(false)}>
-          <PeriodForm notify={notify} onClose={() => setCreating(false)} />
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Sửa kỳ công ${editing.periodKey}`}
-          onClose={() => setEditing(null)}
-        >
-          <PeriodForm
-            record={editing}
-            notify={notify}
-            onClose={() => setEditing(null)}
-          />
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-function LinesPanel({
-  periodId,
-  closed,
-  notify,
-}: {
-  periodId: string;
-  closed: boolean;
-  notify: (message: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<LineDto | null>(null);
-
-  const filters: Record<string, string> = { periodId };
-  if (query.trim()) filters.q = query.trim();
-  const { items, total, loading, error, reload } = useLines(filters);
-  const { summary } = useSummary(periodId);
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="flex flex-wrap items-end gap-2">
-          <Input
-            aria-label="Tìm nhân sự trong bảng công"
-            placeholder="Tìm theo tên hoặc mã…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="sm:w-56"
-          />
-          <span className="text-sm text-muted-foreground">
-            {items.length}/{total} dòng
-          </span>
-        </div>
-        <Button size="sm" disabled={closed} onClick={() => setCreating(true)}>
-          Thêm dòng công
-        </Button>
-      </div>
-
-      {summary && (
-        <div className="flex flex-wrap gap-2">
-          <Badge tone="neutral">Nhân sự: {summary.headcount}</Badge>
-          <Badge tone="success">Ngày công: {summary.workedDays}</Badge>
-          <Badge tone="info">Nghỉ có lương: {summary.paidLeaveDays}</Badge>
-          <Badge tone="warning">
-            Nghỉ không lương: {summary.unpaidLeaveDays}
-          </Badge>
-          <Badge tone="neutral">Tăng ca: {summary.overtimeHours}h</Badge>
-        </div>
-      )}
-
-      {closed && (
-        <p className="text-xs text-muted-foreground">
-          Kỳ công đã chốt nên không thể thêm hoặc sửa dòng công. Mở lại kỳ ở
-          trạng thái “Đang tổng hợp” nếu cần điều chỉnh.
-        </p>
-      )}
-
-      {error && <ErrorLine message={error} retry={reload} />}
-
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải bảng công…
-        </p>
-      ) : !items.length ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h2 className="text-sm font-semibold">Chưa có dòng công</h2>
-          <p className="text-sm text-muted-foreground">
-            Thêm từng nhân sự với ngày công, nghỉ phép và tăng ca của kỳ này.
-          </p>
-          <Button size="sm" disabled={closed} onClick={() => setCreating(true)}>
-            Thêm dòng công
-          </Button>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {items.map((line) => (
-            <li
-              key={line.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border bg-surface p-3"
-            >
-              <div className="min-w-0">
-                <span className="block text-sm font-semibold">
-                  {line.employeeName}{" "}
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {line.employeeId}
-                  </span>
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  Công {line.workedDays} · nghỉ có lương {line.paidLeaveDays} ·
-                  nghỉ không lương {line.unpaidLeaveDays} · tăng ca{" "}
-                  {line.overtimeHours}h{line.note ? ` · ${line.note}` : ""}
-                </span>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={closed}
-                onClick={() => setEditing(line)}
-              >
-                Sửa
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {creating && (
-        <Modal title="Thêm dòng công" onClose={() => setCreating(false)}>
-          <LineForm
-            periodId={periodId}
-            notify={notify}
-            onClose={() => setCreating(false)}
-          />
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Sửa dòng công ${editing.employeeName}`}
-          onClose={() => setEditing(null)}
-        >
-          <LineForm
-            periodId={periodId}
-            record={editing}
-            notify={notify}
-            onClose={() => setEditing(null)}
-          />
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-function LinesTab({
-  notify,
-  initialPeriodId,
-}: {
-  notify: (message: string) => void;
-  initialPeriodId: string;
-}) {
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(initialPeriodId);
-  const { items, loading, error, reload } = usePeriods(
-    query.trim() ? { q: query.trim() } : {},
-  );
-  const active =
-    items.find((period) => period.id === selected) ?? items[0] ?? null;
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-2">
-        <Select
-          aria-label="Chọn kỳ công"
-          value={active?.id ?? ""}
-          onChange={(event) => setSelected(event.target.value)}
-          className="sm:w-72"
-        >
-          {items.map((period) => (
-            <option key={period.id} value={period.id}>
-              {period.name} ({period.periodKey})
-            </option>
-          ))}
-        </Select>
-        <Input
-          aria-label="Tìm kỳ công"
-          placeholder="Tìm kỳ công…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          className="sm:w-56"
-        />
-      </div>
-      {error && <ErrorLine message={error} retry={reload} />}
-      {loading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Đang tải danh sách kỳ công…
-        </p>
-      ) : !active ? (
-        <div className="rounded-panel border border-border bg-surface p-4">
-          <h2 className="text-sm font-semibold">Chưa có kỳ công để xem</h2>
-          <p className="text-sm text-muted-foreground">
-            Tạo kỳ công ở thẻ “Kỳ công” trước khi nhập bảng công.
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Nhân sự · Chấm công</p>
+          <h1>Bảng công &amp; báo cáo kỳ</h1>
+          <p className="page-lede">
+            Tổng hợp ngày công, nghỉ có lương, nghỉ không lương và giờ làm thêm theo từng kỳ
+            công. Kỳ đã chốt là chỉ đọc; mở lại thành nháp rồi mới sửa được dòng công.
           </p>
         </div>
-      ) : (
-        <LinesPanel
-          key={active.id}
-          periodId={active.id}
-          closed={active.status === "CLOSED"}
-          notify={notify}
-        />
-      )}
-    </div>
-  );
-}
-
-export function ModulePage() {
-  const params = useSearchParams();
-  const [tab, setTab] = useState<Tab>(
-    params.get("tab") === "lines" ? "lines" : "periods",
-  );
-  const [selectedPeriod, setSelectedPeriod] = useState("");
-  const [message, setMessage] = useState("");
-
-  function notify(text: string) {
-    setMessage(text);
-    window.setTimeout(() => setMessage(""), 5000);
-  }
-
-  return (
-    <div className="module-view">
-      <section className="records-panel">
-        <div className="flex flex-col gap-1">
-          <h1>{definition.title}</h1>
-          <p className="text-sm text-muted-foreground">
-            Tổng hợp ngày công, nghỉ phép và tăng ca theo tháng. Kỳ đã chốt khóa
-            bảng công cho tới khi mở lại.
-          </p>
-        </div>
-        <nav
-          aria-label="Nhóm báo cáo chấm công"
-          className="flex flex-wrap gap-2"
-        >
-          {tabs.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              aria-current={tab === item.key ? "page" : undefined}
-              onClick={() => setTab(item.key)}
-              className={`rounded-control border px-3 py-1.5 text-sm ${
-                tab === item.key
-                  ? "border-primary bg-accent text-accent-foreground"
-                  : "border-border bg-surface text-muted-foreground"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        {tab === "periods" && (
-          <PeriodsTab
-            notify={notify}
-            onOpenLines={(periodId) => {
-              setSelectedPeriod(periodId);
-              setTab("lines");
-            }}
-          />
-        )}
-        {tab === "lines" && (
-          <LinesTab notify={notify} initialPeriodId={selectedPeriod} />
-        )}
-      </section>
-
-      {message && (
-        <div className="toast" role="status">
-          {message}
-          <button aria-label="Đóng thông báo" onClick={() => setMessage("")}>
-            ×
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={exportRows}
+            disabled={rows.length === 0}
+            title="Xuất các dòng đang hiển thị ra CSV"
+          >
+            <DownloadGlyph /> Xuất CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={report.reload}
+            title="Tải lại kỳ công và bảng công"
+          >
+            <RefreshGlyph /> Tải lại
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setPeriodDialog({})}
+            disabled={!canCreate}
+            title={canCreate ? "Tạo kỳ công mới" : "Bạn không có quyền tạo kỳ công"}
+          >
+            <PlusGlyph /> Tạo kỳ công
           </button>
         </div>
-      )}
+      </header>
+
+      <section className="metric-strip" aria-label="Tổng hợp của kỳ công đang chọn">
+        <div className="metric">
+          <span className="metric-value tabular">
+            {(summary?.headcount ?? 0).toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Nhân sự có dòng công</span>
+          <span className="metric-note">Đếm theo dòng công trong kỳ.</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">{numberLabel(summary?.workedDays ?? 0, 2)}</span>
+          <span className="metric-label">Ngày công</span>
+          <span className="metric-note">Cộng ngày công thực tế của mọi dòng.</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {numberLabel(summary?.paidLeaveDays ?? 0, 2)}
+          </span>
+          <span className="metric-label">Nghỉ có lương</span>
+          <span className="metric-note">Phép và nghỉ lễ được tính lương.</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {numberLabel(summary?.unpaidLeaveDays ?? 0, 2)}
+          </span>
+          <span className="metric-label">Nghỉ không lương</span>
+          <span className="metric-note">Không hưởng lương trong kỳ.</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {numberLabel(summary?.overtimeHours ?? 0, 2)}
+          </span>
+          <span className="metric-label">Giờ làm thêm</span>
+          <span className="metric-note">Cộng giờ làm thêm đã khai báo.</span>
+        </div>
+      </section>
+
+      {report.summaryIssue ? (
+        <div className="alert alert-warning" role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>Không tải được tổng hợp của kỳ đang chọn.</span>
+            <span className="muted">{report.summaryIssue}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {report.feedback ? (
+        <div className={ALERT_TONE[report.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{report.feedback.message}</span>
+            {report.feedback.hint ? (
+              <span className="muted">{report.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => report.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="row items-center gap-2">
+                <label className="muted" htmlFor="reports-period">
+                  Kỳ công
+                </label>
+                <select
+                  id="reports-period"
+                  className="select"
+                  value={report.selectedId}
+                  onChange={(event) => report.setSelectedId(event.target.value)}
+                  disabled={report.loadingPeriods || report.periods.length === 0}
+                  style={{ minWidth: 232 }}
+                >
+                  {report.periods.length === 0 ? <option value="">Chưa có kỳ công</option> : null}
+                  {report.periods.map((period) => (
+                    <option key={period.id} value={period.id}>
+                      {formatPeriodKey(period.periodKey)} · {period.name} ·{" "}
+                      {PERIOD_STATUS_LABEL[period.status]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <select
+                className="select"
+                value={report.periodStatusFilter}
+                aria-label="Lọc kỳ công theo trạng thái"
+                onChange={(event) =>
+                  report.setPeriodStatusFilter(event.target.value as PeriodStatus | "")
+                }
+                style={{ width: 176 }}
+              >
+                <option value="">Mọi trạng thái kỳ</option>
+                {PERIOD_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {PERIOD_STATUS_LABEL[status]}
+                  </option>
+                ))}
+              </select>
+
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="reports-search"
+                  className="input"
+                  type="search"
+                  value={report.lineQuery.q}
+                  autoComplete="off"
+                  placeholder="Tìm theo tên hoặc mã nhân sự…"
+                  aria-label="Tìm dòng công trong kỳ đang chọn"
+                  disabled={!report.selectedId}
+                  onChange={(event) =>
+                    report.patchLineQuery({ q: event.target.value, page: 1 })
+                  }
+                />
+                {report.lineQuery.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => report.patchLineQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {report.lines.total.toLocaleString("vi-VN")} dòng công
+              </span>
+              {report.selected ? (
+                <>
+                  {canUpdate ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setPeriodDialog({ record: report.selected ?? undefined })}
+                    >
+                      Sửa kỳ
+                    </button>
+                  ) : null}
+                  {canUpdate ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() =>
+                        report.selected && report.togglePeriodStatus(report.selected)
+                      }
+                      disabled={report.savingId === report.selected.id}
+                      aria-label={
+                        report.readOnly
+                          ? "Mở lại kỳ công để chỉnh sửa"
+                          : "Chốt kỳ công này"
+                      }
+                    >
+                      {report.readOnly ? <UnlockGlyph /> : <LockGlyph />}
+                      {report.readOnly ? "Mở lại" : "Chốt kỳ"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setLineDialog({})}
+                    disabled={!canCreate || report.readOnly}
+                    title={
+                      report.readOnly
+                        ? "Kỳ công đã chốt nên không thêm dòng công"
+                        : canCreate
+                          ? "Thêm dòng công cho nhân sự"
+                          : "Bạn không có quyền thêm dòng công"
+                    }
+                  >
+                    <PlusGlyph /> Thêm dòng công
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          {report.lineQuery.q ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              <span className="chip" data-active="true">
+                Từ khoá: “{report.term}”
+                <button
+                  type="button"
+                  className="chip-remove"
+                  onClick={() => report.patchLineQuery({ q: "", page: 1 })}
+                  aria-label="Bỏ lọc từ khoá"
+                >
+                  <CloseGlyph />
+                </button>
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => report.patchLineQuery({ q: "", page: 1 })}
+              >
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem bảng công</span>
+            <p className="empty-body">
+              Yêu cầu quản trị hệ thống cấp quyền “Xem” cho phân hệ Bảng công rồi tải lại trang.
+            </p>
+            <button type="button" className="btn btn-ghost" onClick={report.reload}>
+              Tải lại
+            </button>
+          </div>
+        ) : report.periodError ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách kỳ công</span>
+            <p className="empty-body">{report.periodError.message}</p>
+            <button type="button" className="btn btn-primary" onClick={report.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : report.periods.length === 0 && !report.loadingPeriods ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {report.periodStatusFilter
+                ? "Không có kỳ công ở trạng thái này"
+                : "Chưa có kỳ công nào"}
+            </span>
+            <p className="empty-body">
+              {report.periodStatusFilter
+                ? "Bỏ lọc trạng thái để xem mọi kỳ công đã tạo."
+                : "Tạo kỳ công theo tháng trước, sau đó thêm dòng công cho từng nhân sự."}
+            </p>
+            {report.periodStatusFilter ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => report.setPeriodStatusFilter("")}
+              >
+                Bỏ lọc trạng thái
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setPeriodDialog({})}
+                disabled={!canCreate}
+              >
+                <PlusGlyph /> Tạo kỳ công
+              </button>
+            )}
+          </div>
+        ) : report.selected ? (
+          <div className="surface-body stack gap-3">
+            <div className="spread wrap items-center gap-2">
+              <div className="stack gap-1">
+                <span className="surface-title">
+                  {formatPeriodKey(report.selected.periodKey)} · {report.selected.name}
+                </span>
+                <span className="muted">
+                  <span className="tabular">
+                    {formatDate(report.selected.fromDate)} – {formatDate(report.selected.toDate)}
+                  </span>
+                  {" · "}
+                  {report.selected.lineCount.toLocaleString("vi-VN")} dòng công · cập nhật{" "}
+                  <span className="tabular">{formatDateTime(report.selected.updatedAt)}</span>
+                </span>
+                {report.selected.note ? (
+                  <span className="muted">{report.selected.note}</span>
+                ) : null}
+              </div>
+              <StatusBadge
+                label={PERIOD_STATUS_LABEL[report.selected.status]}
+                tone={PERIOD_STATUS_TONE[report.selected.status]}
+              />
+            </div>
+
+            <p className="muted">{PERIOD_STATUS_HINT[report.selected.status]}</p>
+
+            <div className="alert" role="note">
+              <div className="stack gap-1">
+                <span>
+                  Báo cáo này chỉ có số liệu máy chủ tổng hợp được: ngày công, nghỉ có lương,
+                  nghỉ không lương và giờ làm thêm.
+                </span>
+                <span className="muted">
+                  Chưa hiển thị: {UNAVAILABLE_METRICS.map((item) => item.label).join(", ")} —{" "}
+                  {UNAVAILABLE_METRICS[0]?.reason ?? ""}. Các cột này sẽ xuất hiện khi máy chủ bổ
+                  sung trường tương ứng.
+                </span>
+              </div>
+            </div>
+
+            {report.lineError ? (
+              <div className="error-state" role="alert">
+                <span className="empty-title">Không tải được dòng công của kỳ</span>
+                <p className="empty-body">{report.lineError.message}</p>
+                <button type="button" className="btn btn-primary" onClick={report.reload}>
+                  Thử lại
+                </button>
+              </div>
+            ) : !report.loadingLines && rows.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-title">
+                  {report.lineQuery.q
+                    ? "Không có nhân sự nào khớp từ khoá"
+                    : "Kỳ này chưa có dòng công nào"}
+                </span>
+                <p className="empty-body">
+                  {report.lineQuery.q
+                    ? "Bỏ từ khoá để xem toàn bộ dòng công trong kỳ."
+                    : "Thêm dòng công cho từng nhân sự; mỗi người chỉ một dòng trong một kỳ."}
+                </p>
+                {report.lineQuery.q ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => report.patchLineQuery({ q: "", page: 1 })}
+                  >
+                    Xoá từ khoá
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setLineDialog({})}
+                    disabled={!canCreate || report.readOnly}
+                  >
+                    <PlusGlyph /> Thêm dòng công
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <caption className="sr-only">
+                    Bảng công của kỳ đang chọn, sắp xếp theo cột đang chọn trong trang hiện tại.
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col" aria-sort={ariaSort("employeeName")}>
+                        <SortButton
+                          label="Nhân sự"
+                          active={sort.key === "employeeName"}
+                          direction={sort.dir}
+                          onClick={() => toggleSort("employeeName")}
+                        />
+                      </th>
+                      <th scope="col" aria-sort={ariaSort("workedDays")}>
+                        <SortButton
+                          label="Ngày công"
+                          active={sort.key === "workedDays"}
+                          direction={sort.dir}
+                          onClick={() => toggleSort("workedDays")}
+                        />
+                      </th>
+                      <th scope="col">Nghỉ có lương</th>
+                      <th scope="col">Nghỉ không lương</th>
+                      <th scope="col" aria-sort={ariaSort("overtimeHours")}>
+                        <SortButton
+                          label="Giờ làm thêm"
+                          active={sort.key === "overtimeHours"}
+                          direction={sort.dir}
+                          onClick={() => toggleSort("overtimeHours")}
+                        />
+                      </th>
+                      <th scope="col">Ghi chú</th>
+                      <th scope="col">
+                        <span className="sr-only">Thao tác</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  {report.loadingLines ? (
+                    <SkeletonRows rows={Math.min(8, Math.max(3, rows.length || 6))} columns={7} />
+                  ) : (
+                    <tbody>
+                      {rows.map((line) => (
+                        <tr key={line.id}>
+                          <td>
+                            <div className="stack gap-1">
+                              <span className="cell-title">{line.employeeName}</span>
+                              <span className="muted mono">{line.employeeId}</span>
+                            </div>
+                          </td>
+                          <td className="tabular">{numberLabel(line.workedDays, 2)}</td>
+                          <td className="tabular">{numberLabel(line.paidLeaveDays, 2)}</td>
+                          <td className="tabular">{numberLabel(line.unpaidLeaveDays, 2)}</td>
+                          <td className="tabular">{numberLabel(line.overtimeHours, 2)}</td>
+                          <td className="truncate" title={line.note}>
+                            {line.note || <span className="subtle">—</span>}
+                          </td>
+                          <td>
+                            <div className="row justify-end gap-2">
+                              {canUpdate && !report.readOnly ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => setLineDialog({ record: line })}
+                                >
+                                  Sửa
+                                </button>
+                              ) : (
+                                <span className="subtle">
+                                  {report.readOnly ? "Kỳ đã chốt" : "Chỉ đọc"}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  )}
+                  {!report.loadingLines && rows.length > 0 ? (
+                    <tfoot>
+                      <tr>
+                        <td>
+                          <span className="cell-title">
+                            Tổng trang này ({rows.length.toLocaleString("vi-VN")} dòng)
+                          </span>
+                        </td>
+                        <td className="tabular">
+                          {numberLabel(
+                            rows.reduce((sum, line) => sum + line.workedDays, 0),
+                            2,
+                          )}
+                        </td>
+                        <td className="tabular">
+                          {numberLabel(
+                            rows.reduce((sum, line) => sum + line.paidLeaveDays, 0),
+                            2,
+                          )}
+                        </td>
+                        <td className="tabular">
+                          {numberLabel(
+                            rows.reduce((sum, line) => sum + line.unpaidLeaveDays, 0),
+                            2,
+                          )}
+                        </td>
+                        <td className="tabular">
+                          {numberLabel(
+                            rows.reduce((sum, line) => sum + line.overtimeHours, 0),
+                            2,
+                          )}
+                        </td>
+                        <td colSpan={2} className="muted">
+                          Tổng của cả kỳ nằm ở dải chỉ số phía trên.
+                        </td>
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+            )}
+
+            {rows.length > 0 ? (
+              <Pagination
+                page={report.lineQuery.page}
+                pageSize={report.lineQuery.pageSize}
+                total={report.lines.total}
+                onPage={(page) => report.patchLineQuery({ page })}
+                onPageSize={(pageSize) => report.patchLineQuery({ pageSize, page: 1 })}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <div className="empty-state">
+            <span className="empty-title">Chọn một kỳ công để xem bảng công</span>
+            <p className="empty-body">
+              Dùng ô “Kỳ công” ở thanh công cụ để chuyển giữa các kỳ đã tạo.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <p className="page-footnote">
+        Dải chỉ số phía trên lấy từ endpoint tổng hợp của kỳ nên luôn khớp toàn bộ dòng công,
+        kể cả khi bảng bên dưới chỉ tải một trang. Tổng ở chân bảng chỉ tính các dòng đang hiển
+        thị. Báo cáo theo nhân sự và theo kỳ dùng cùng bộ số liệu này; các chỉ số đi muộn, về
+        sớm, thiếu giờ ra và vắng không phép chưa có trong dữ liệu máy chủ.
+      </p>
+
+      {periodDialog ? (
+        <PeriodDialog
+          record={periodDialog.record}
+          onCreate={report.createPeriodRow}
+          onPatch={report.patchPeriodRow}
+          onClose={() => setPeriodDialog(null)}
+        />
+      ) : null}
+
+      {lineDialog && report.selected ? (
+        <LineDialog
+          period={report.selected}
+          record={lineDialog.record}
+          onCreate={report.createLineRow}
+          onPatch={report.patchLineRow}
+          onClose={() => setLineDialog(null)}
+        />
+      ) : null}
+
+      {report.savingId ? (
+        <p className="sr-only" role="status" aria-live="polite">
+          Đang cập nhật trạng thái kỳ công.
+        </p>
+      ) : null}
     </div>
   );
 }

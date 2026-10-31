@@ -1,56 +1,76 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/hr-management/attendance/workforce-board/dto/workforce-board.dto.ts`.
+ */
+export const PRESENCE_STATUSES = ["IN_OFFICE", "REMOTE", "LEAVE", "OFF_SITE"] as const;
+export type PresenceStatus = (typeof PRESENCE_STATUSES)[number];
 
-export const statusSchema = z.enum([
-  "IN_OFFICE",
-  "REMOTE",
-  "LEAVE",
-  "OFF_SITE",
-]);
+export interface Presence {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  /** YYYY-MM-DD. */
+  workDate: string;
+  status: PresenceStatus;
+  shiftLabel: string;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+export interface PresenceInput {
+  employeeId: string;
+  employeeName: string;
+  workDate: string;
+  status: PresenceStatus;
+  shiftLabel: string;
+  note: string;
+}
 
-export const presenceInput = z
-  .object({
-    employeeId: z.string().trim().min(1, "Nhập mã nhân sự").max(64),
-    employeeName: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-    workDate: dateKey,
-    status: statusSchema.default("IN_OFFICE"),
-    shiftLabel: z.string().trim().max(120).default(""),
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+export interface PresencePatch {
+  status?: PresenceStatus;
+  shiftLabel?: string;
+  note?: string;
+  version: number;
+}
 
-export const presenceSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    workDate: z.string(),
-    status: statusSchema,
-    shiftLabel: z.string(),
-    note: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+/** Shape of `GET /workforce-board/summary?workDate=…`. */
+export interface PresenceSummary {
+  workDate: string;
+  items: { status: PresenceStatus; count: number }[];
+  total: number;
+}
 
-export const summarySchema = z.object({
-  workDate: z.string(),
-  items: z.array(z.object({ status: statusSchema, count: z.number() })),
-  total: z.number(),
-});
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
-export const listSchema = z.object({
-  items: z.array(presenceSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+/** Shape of `GET /auth/session`. */
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+  };
+}
 
-export type Status = z.infer<typeof statusSchema>;
-export type PresenceDto = z.infer<typeof presenceSchema>;
-export type PresenceInput = z.input<typeof presenceInput>;
-export type Summary = z.infer<typeof summarySchema>;
+/** Shape of `GET /permissions/me`. */
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+/** The slice of `PermissionsMe` this screen keeps: actions for its own key. */
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}

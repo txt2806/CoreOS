@@ -1,408 +1,500 @@
 "use client";
-import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type {
-  EmployeeDto,
-  Status,
-} from "@/features/hr-management/employees/employee-directory/types";
+
+import { useState } from "react";
+import { createEmployee, updateEmployee } from "../api/client";
 import {
-  definition,
-  statusLabels,
-} from "@/features/hr-management/employees/employee-directory/constants";
-import { client } from "@/features/hr-management/employees/employee-directory/api/client";
-import { useEmployees } from "@/features/hr-management/employees/employee-directory/hooks/use-employees";
+  EXPORT_FILE_PREFIX,
+  ROLE_LABEL,
+  SEARCH_HINT,
+  STATUS_LABEL,
+} from "../constants";
+import { downloadCsv, formatDate, number } from "../format";
+import { useEmployees, type Feedback } from "../hooks/use-employees";
+import type { Employee, EmployeeInput, EmployeeStatus } from "../types";
+import { EMPLOYEE_STATUSES } from "../types";
+import { EmployeeForm } from "./employee-form";
 import {
+  BuildingGlyph,
+  CloseGlyph,
+  DownloadGlyph,
   Modal,
-  useWorkspace,
-} from "@/features/hr-management/employees/employee-directory/components/primitives/workspace";
-import { Button } from "@/features/hr-management/employees/employee-directory/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/hr-management/employees/employee-directory/components/primitives/forms";
-import { Badge } from "@/features/hr-management/employees/employee-directory/components/primitives/foundations";
-import { EmployeeForm } from "@/features/hr-management/employees/employee-directory/components/employee-form";
-const isActive = (status: Status) => status === "ACTIVE";
-const formatDate = (value: string) =>
-  new Intl.DateTimeFormat("vi-VN", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(new Date(`${value}T00:00:00Z`));
-function StatusBadge({ status }: { status: Status }) {
-  return (
-    <Badge variant={isActive(status) ? "success" : "neutral"} dot>
-      {statusLabels[status]}
-    </Badge>
-  );
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+  SkeletonRows,
+  StatusBadge,
+  UsersGlyph,
+} from "./primitives";
+import { ProfileSheet } from "./profile-sheet";
+
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+type Dialog = { mode: "create" } | { mode: "edit"; row: Employee } | null;
+
+function today(): string {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60_000;
+  return new Date(now.getTime() - offset).toISOString().slice(0, 10);
 }
-export function ModulePage() {
-  const params = useSearchParams();
-  const { notify } = useWorkspace();
-  const { employees, loading, error, reload } = useEmployees();
-  const [query, setQuery] = useState("");
-  const [department, setDepartment] = useState("ALL");
-  const [status, setStatus] = useState<Status | "ALL">(
-    params.get("status") === "ACTIVE" || params.get("status") === "INACTIVE"
-      ? (params.get("status") as Status)
-      : "ALL",
-  );
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<EmployeeDto | null>(null);
-  const [target, setTarget] = useState<EmployeeDto | null>(null);
-  const [actionError, setActionError] = useState("");
-  const [pending, setPending] = useState(false);
-  const departments = useMemo(
-    () =>
-      [...new Set(employees.map((item) => item.departmentName).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, "vi"))
-        .map((name) => ({
-          name,
-          count: employees.filter((item) => item.departmentName === name)
-            .length,
-        })),
-    [employees],
-  );
-  const filtered = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase("vi");
-    return employees.filter(
-      (item) =>
-        (status === "ALL" || item.status === status) &&
-        (department === "ALL" || item.departmentName === department) &&
-        (!term ||
-          `${item.code} ${item.fullName} ${item.email} ${item.phone} ${item.jobTitle} ${item.teamName} ${item.managerName}`
-            .toLocaleLowerCase("vi")
-            .includes(term)),
-    );
-  }, [department, employees, query, status]);
-  const activeCount = employees.filter((item) => isActive(item.status)).length;
-  async function confirmToggle() {
-    if (!target || pending) return;
-    setPending(true);
-    setActionError("");
-    try {
-      const next: Status = isActive(target.status) ? "INACTIVE" : "ACTIVE";
-      await client.update(target, { status: next });
-      setTarget(null);
-      notify(
-        next === "ACTIVE"
-          ? "Đã đưa nhân viên trở lại trạng thái làm việc."
-          : "Đã ghi nhận nhân viên nghỉ việc.",
-      );
-      reload();
-    } catch (cause) {
-      setActionError(
-        cause instanceof Error ? cause.message : "Không thể đổi trạng thái",
-      );
-    } finally {
-      setPending(false);
+
+export function EmployeeDirectoryPage() {
+  const dir = useEmployees();
+  const [dialog, setDialog] = useState<Dialog>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const forbidden = dir.error?.status === 403;
+  const canCreate = dir.can("create");
+  const canUpdate = dir.can("update");
+  const rows = dir.data.items;
+  const selected = rows.find((row) => row.id === selectedId) ?? null;
+
+  const exportRows = () => {
+    const header = [
+      "Mã nhân sự",
+      "Họ và tên",
+      "Email",
+      "Điện thoại",
+      "Chức danh",
+      "Phòng ban",
+      "Nhóm",
+      "Người quản lý",
+      "Ngày vào làm",
+      "Trạng thái",
+    ];
+    const body = rows.map((row) => [
+      row.code,
+      row.fullName,
+      row.email,
+      row.phone,
+      row.jobTitle,
+      row.departmentName,
+      row.teamName,
+      row.managerName,
+      formatDate(row.startDate),
+      STATUS_LABEL[dir.statusOf(row)],
+    ]);
+    downloadCsv(`${EXPORT_FILE_PREFIX}-${today()}.csv`, [header, ...body]);
+    dir.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${number(rows.length)} hồ sơ đang hiển thị ra tệp CSV.`,
+      hint: "Tệp chỉ chứa trang hiện tại, không phải toàn bộ danh bạ.",
+    });
+  };
+
+  const saveEmployee = async (values: EmployeeInput) => {
+    if (dialog?.mode === "edit") {
+      /* `updateEmployeeSchema` is `.partial()`, but `version` is mandatory —
+         a stale version comes back as 409 instead of silently overwriting. */
+      await updateEmployee(dialog.row.id, { ...values, version: dialog.row.version });
+      dir.setFeedback({ tone: "success", message: `Đã lưu hồ sơ ${values.fullName}.` });
+    } else {
+      const created = await createEmployee(values);
+      dir.setFeedback({
+        tone: "success",
+        message: `Đã thêm ${created.fullName} vào danh bạ.`,
+        hint: created.teamName
+          ? `Đang thuộc nhóm ${created.teamName}.`
+          : "Hồ sơ chưa được xếp nhóm — mỗi người chỉ thuộc tối đa một nhóm.",
+      });
     }
-  }
+    setDialog(null);
+    dir.reload();
+  };
+
+  const inactiveCount = dir.totals ? dir.totals.all - dir.totals.active : 0;
+
   return (
-    <div className="module-view">
-      <section className="records-panel">
-        <header className="page-header">
-          <div>
-            <span className="eyebrow">Nhân sự · Hồ sơ</span>
-            <h1>{definition.title}</h1>
-            <p>
-              Hồ sơ nhân sự dùng cho phân công công việc, điểm danh và báo cáo;
-              chức danh chỉ là thuộc tính, không cấp quyền.
-            </p>
-          </div>
-          <div className="page-actions">
-            <Button onClick={() => setCreating(true)}>Thêm nhân viên</Button>
-          </div>
-        </header>
-
-        <dl className="metric-strip">
-          <div className="metric">
-            <dt>Tổng nhân sự</dt>
-            <dd>{employees.length}</dd>
-          </div>
-          <div className="metric">
-            <dt>Đang làm việc</dt>
-            <dd>{activeCount}</dd>
-          </div>
-          <div className="metric">
-            <dt>Phòng ban</dt>
-            <dd>{departments.length}</dd>
-          </div>
-        </dl>
-
-        <div className="toolbar">
-          <Input
-            aria-label="Tìm nhân viên"
-            placeholder="Tìm theo mã, tên, email, chức danh…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <Select
-            aria-label="Lọc phòng ban"
-            value={department}
-            onChange={(event) => setDepartment(event.target.value)}
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Nhân sự · Danh bạ</p>
+          <h1>Danh bạ nhân sự</h1>
+          <p className="page-lede">
+            Hồ sơ nhân sự kèm phòng ban, nhóm và chức danh. Chức danh là thuộc tính công việc; vai
+            trò hệ thống chỉ có EMPLOYEE và MANAGER và không suy ra từ chức danh.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={exportRows}
+            disabled={rows.length === 0}
+            title="Xuất các dòng đang hiển thị ra CSV"
           >
-            <option value="ALL">Tất cả phòng ban</option>
-            {departments.map((item) => (
-              <option key={item.name} value={item.name}>
-                {item.name} ({item.count})
-              </option>
-            ))}
-          </Select>
-          <Select
-            aria-label="Lọc trạng thái"
-            value={status}
-            onChange={(event) =>
-              setStatus(event.target.value as Status | "ALL")
-            }
+            <DownloadGlyph /> Xuất CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setDialog({ mode: "create" })}
+            disabled={!canCreate}
+            title={canCreate ? "Thêm hồ sơ nhân sự" : "Bạn không có quyền thêm hồ sơ"}
           >
-            <option value="ALL">Tất cả trạng thái</option>
-            <option value="ACTIVE">{statusLabels.ACTIVE}</option>
-            <option value="INACTIVE">{statusLabels.INACTIVE}</option>
-          </Select>
-          <span className="text-sm text-muted-foreground">
-            {filtered.length} nhân sự
-          </span>
+            <PlusGlyph /> Thêm nhân sự
+          </button>
+        </div>
+      </header>
+
+      {dir.totals ? (
+        <section className="metric-strip" aria-label="Quy mô danh bạ">
+          <div className="metric">
+            <span className="metric-value tabular">{number(dir.totals.all)}</span>
+            <span className="metric-label">Hồ sơ nhân sự</span>
+            <span className="metric-note">toàn bộ danh bạ</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{number(dir.totals.active)}</span>
+            <span className="metric-label">Đang làm việc</span>
+            <span className="metric-note">theo trạng thái ACTIVE</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{number(inactiveCount)}</span>
+            <span className="metric-label">Đã nghỉ</span>
+            <span className="metric-note">vẫn tra cứu được trong danh bạ</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">2</span>
+            <span className="metric-label">Vai trò hệ thống</span>
+            <span className="metric-note">
+              {ROLE_LABEL.EMPLOYEE} và {ROLE_LABEL.MANAGER} — cố định
+            </span>
+          </div>
+        </section>
+      ) : null}
+
+      {dir.feedback ? (
+        <div className={ALERT_TONE[dir.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{dir.feedback.message}</span>
+            {dir.feedback.hint ? <span className="muted">{dir.feedback.hint}</span> : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => dir.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="employee-search"
+                  className="input"
+                  type="search"
+                  value={dir.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo mã, họ tên, email hoặc chức danh…"
+                  aria-label="Tìm nhân sự theo mã, họ tên, email hoặc chức danh"
+                  aria-describedby="employee-search-hint"
+                  onChange={(event) => dir.patchQuery({ q: event.target.value, page: 1 })}
+                />
+                {dir.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => dir.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={dir.query.status ?? ""}
+                aria-label="Lọc nhân sự theo trạng thái"
+                onChange={(event) =>
+                  dir.patchQuery({
+                    status: event.target.value as EmployeeStatus | "",
+                    page: 1,
+                  })
+                }
+                style={{ width: 170 }}
+              >
+                <option value="">Mọi trạng thái</option>
+                {EMPLOYEE_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {STATUS_LABEL[status]}
+                  </option>
+                ))}
+              </select>
+
+              {/* `departmentName` is compared for equality by the repository, so
+                  this is a name picker in spirit — the hint says so out loud. */}
+              <input
+                id="employee-department"
+                className="input"
+                type="search"
+                value={dir.query.departmentName ?? ""}
+                autoComplete="off"
+                placeholder="Tên phòng ban (khớp chính xác)…"
+                aria-label="Lọc theo tên phòng ban, khớp chính xác"
+                onChange={(event) =>
+                  dir.patchQuery({ departmentName: event.target.value, page: 1 })
+                }
+                style={{ maxWidth: 260 }}
+              />
+            </div>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {number(dir.data.total)} nhân sự
+                {dir.filtersActive ? " · đang lọc" : ""}
+              </span>
+            </div>
+          </div>
+
+          <p className="muted" id="employee-search-hint" style={{ paddingTop: "var(--space-2)" }}>
+            {SEARCH_HINT}
+          </p>
+
+          {dir.filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {dir.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{dir.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => dir.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {dir.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {STATUS_LABEL[dir.query.status]}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => dir.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {dir.department ? (
+                <span className="chip" data-active="true">
+                  Phòng ban: {dir.department}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => dir.patchQuery({ departmentName: "", page: 1 })}
+                    aria-label="Bỏ lọc phòng ban"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={dir.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
         </div>
 
-        {(error || actionError) && (
-          <div role="alert" className="error">
-            {error || actionError}
-            <Button variant="ghost" onClick={reload}>
+        {forbidden ? (
+          <div className="forbidden-state" role="status">
+            <h2 className="empty-title">Bạn không có quyền xem danh bạ nhân sự</h2>
+            <p className="empty-body">
+              Màn hình này cần quyền xem trên phân hệ Danh bạ nhân sự. Liên hệ quản trị viên nếu bạn
+              cần được cấp quyền.
+            </p>
+            <button type="button" className="btn btn-ghost" onClick={dir.reload}>
               Thử lại
-            </Button>
+            </button>
           </div>
-        )}
-
-        {loading ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Đang tải danh bạ nhân sự…
-          </p>
-        ) : !filtered.length ? (
-          <div className="surface empty-state">
-            <h2>
-              {employees.length
-                ? "Không có nhân sự phù hợp"
-                : "Chưa có nhân sự"}
-            </h2>
-            <p>
-              {employees.length
-                ? "Xóa hoặc đổi điều kiện lọc để xem lại."
-                : "Thêm nhân sự đầu tiên để bắt đầu phân công công việc."}
-            </p>
-            {!employees.length && (
-              <Button size="sm" onClick={() => setCreating(true)}>
-                Thêm nhân viên
-              </Button>
-            )}
+        ) : dir.error ? (
+          <div className="error-state" role="alert">
+            <h2 className="empty-title">Không tải được danh bạ nhân sự</h2>
+            <p className="empty-body">{dir.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={dir.reload}>
+              Thử lại
+            </button>
           </div>
-        ) : (
-          <>
-            <ul className="flex flex-col gap-2 sm:hidden">
-              {filtered.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex flex-col gap-2 rounded-panel border border-border bg-surface p-3"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-foreground">
-                        {item.fullName}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {item.code}
-                        {item.jobTitle ? ` · ${item.jobTitle}` : ""}
-                      </p>
-                    </div>
-                    <StatusBadge status={item.status} />
-                  </div>
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                    <div className="min-w-0">
-                      <dt className="text-muted-foreground">Email</dt>
-                      <dd className="truncate">{item.email || "—"}</dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-muted-foreground">Phòng ban</dt>
-                      <dd className="truncate">
-                        {item.departmentName || "Chưa gán phòng ban"}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-muted-foreground">Nhóm</dt>
-                      <dd className="truncate">
-                        {item.teamName || "Chưa gán nhóm"}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-muted-foreground">Vào làm</dt>
-                      <dd>
-                        {item.startDate ? formatDate(item.startDate) : "—"}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setEditing(item)}
-                    >
-                      Sửa
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setActionError("");
-                        setTarget(item);
-                      }}
-                    >
-                      {isActive(item.status) ? "Cho nghỉ" : "Kích hoạt"}
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <div className="relative hidden overflow-x-auto sm:block">
-              <table className="w-full border-collapse text-sm">
-                <caption className="sr-only">
-                  Danh sách nhân sự theo phòng ban và trạng thái
-                </caption>
-                <thead>
-                  <tr className="text-left text-xs uppercase text-muted-foreground">
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Nhân sự
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Liên hệ
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Tổ chức
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      Trạng thái
-                    </th>
-                    <th scope="col" className="px-2 py-2 font-medium">
-                      <span className="sr-only">Thao tác</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((item) => (
-                    <tr key={item.id} className="border-t border-border">
-                      <td className="px-2 py-3 align-top">
-                        <span className="block font-semibold text-foreground">
-                          {item.fullName}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">
-                          {item.code}
-                          {item.jobTitle ? ` · ${item.jobTitle}` : ""}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <span className="block">{item.email || "—"}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {item.phone || "Chưa có số điện thoại"}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <span className="block">
-                          {item.departmentName || "Chưa gán phòng ban"}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">
-                          {item.teamName || "Chưa gán nhóm"}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <StatusBadge status={item.status} />
-                        <span className="mt-1 block text-xs text-muted-foreground">
-                          {item.startDate
-                            ? `Vào làm ${formatDate(item.startDate)}`
-                            : "Chưa có ngày vào làm"}
-                        </span>
-                      </td>
-                      <td className="px-2 py-3 align-top">
-                        <div className="flex flex-wrap justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditing(item)}
-                          >
-                            Sửa
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setActionError("");
-                              setTarget(item);
-                            }}
-                          >
-                            {isActive(item.status) ? "Cho nghỉ" : "Kích hoạt"}
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-
-        <p className="text-xs text-muted-foreground">
-          Hồ sơ nhân sự không bị xóa cứng; dùng trạng thái “Đã nghỉ việc” để giữ
-          lịch sử phân công và báo cáo.
-        </p>
-      </section>
-
-      {creating && (
-        <Modal title="Thêm nhân viên" onClose={() => setCreating(false)}>
-          <EmployeeForm onClose={() => setCreating(false)} />
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Chỉnh sửa ${editing.fullName}`}
-          onClose={() => setEditing(null)}
-        >
-          <EmployeeForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {target && (
-        <Modal
-          title={isActive(target.status) ? "Ghi nhận nghỉ việc" : "Kích hoạt"}
-          onClose={() => setTarget(null)}
-        >
-          <div className="flex flex-col gap-3">
-            <p className="text-sm">
-              {isActive(target.status)
-                ? `Nhân sự “${target.fullName}” sẽ không xuất hiện khi phân công mới; dữ liệu công việc cũ vẫn giữ nguyên.`
-                : `Nhân sự “${target.fullName}” sẽ trở lại trạng thái làm việc.`}
-            </p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
+        ) : !dir.loading && rows.length === 0 ? (
+          dir.filtersActive ? (
+            <div className="empty-state">
+              <h2 className="empty-title">Không nhân sự nào khớp bộ lọc</h2>
+              <p className="empty-body">
+                Danh bạ đang có {number(dir.data.total)} hồ sơ nhưng không hồ sơ nào khớp điều kiện
+                hiện tại. Từ khoá không tìm trong tên nhóm — hãy dùng ô phòng ban.
               </p>
-            )}
+              <button type="button" className="btn btn-ghost" onClick={dir.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <h2 className="empty-title">Danh bạ chưa có hồ sơ nào</h2>
+              <p className="empty-body">
+                Thêm hồ sơ đầu tiên để bắt đầu. Mỗi người chỉ thuộc tối đa một nhóm và cần một phòng
+                ban để bộ lọc theo phòng ban dùng được.
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setDialog({ mode: "create" })}
+                disabled={!canCreate}
+              >
+                <PlusGlyph /> Thêm nhân sự đầu tiên
+              </button>
+            </div>
+          )
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table">
+              <caption className="sr-only">
+                Danh bạ nhân sự, sắp xếp cố định theo trạng thái rồi họ tên
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Mã</th>
+                  <th scope="col">Họ và tên</th>
+                  <th scope="col">Chức danh</th>
+                  <th scope="col">Phòng ban / Nhóm</th>
+                  <th scope="col">Ngày vào làm</th>
+                  <th scope="col">Trạng thái</th>
+                  <th scope="col">
+                    <span className="sr-only">Thao tác</span>
+                  </th>
+                </tr>
+              </thead>
+              {dir.loading ? (
+                <SkeletonRows rows={6} columns={7} />
+              ) : (
+                <tbody>
+                  {rows.map((row) => {
+                    const status = dir.statusOf(row);
+                    return (
+                      <tr key={row.id}>
+                        <td className="mono">{row.code}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="link cell-title"
+                            onClick={() => setSelectedId(row.id)}
+                            aria-label={`Xem hồ sơ ${row.fullName}`}
+                          >
+                            {row.fullName}
+                          </button>
+                          <div className="list-meta">{row.email || "Chưa có email"}</div>
+                        </td>
+                        <td>{row.jobTitle || <span className="subtle">Chưa cập nhật</span>}</td>
+                        <td>
+                          <div className="row items-center gap-2">
+                            <BuildingGlyph />
+                            <span>{row.departmentName || "—"}</span>
+                          </div>
+                          <div className="list-meta row items-center gap-2">
+                            <UsersGlyph />
+                            {row.teamName || "Chưa vào nhóm"}
+                          </div>
+                        </td>
+                        <td className="tabular">{formatDate(row.startDate)}</td>
+                        <td>
+                          <StatusBadge status={status} />
+                        </td>
+                        <td>
+                          <div className="row items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setSelectedId(row.id)}
+                            >
+                              Hồ sơ
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setDialog({ mode: "edit", row })}
+                              disabled={!canUpdate}
+                              title={canUpdate ? "Sửa hồ sơ" : "Bạn không có quyền sửa hồ sơ"}
+                            >
+                              Sửa
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              )}
+            </table>
           </div>
-          <footer className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setTarget(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant={isActive(target.status) ? "destructive" : "primary"}
-              disabled={pending}
-              onClick={() => void confirmToggle()}
-            >
-              {pending
-                ? "Đang lưu…"
-                : isActive(target.status)
-                  ? "Cho nghỉ việc"
-                  : "Kích hoạt"}
-            </Button>
-          </footer>
+        )}
+
+        {!forbidden && !dir.error && rows.length > 0 ? (
+          <Pagination
+            page={dir.query.page}
+            pageSize={dir.query.pageSize}
+            total={dir.data.total}
+            onPage={(page) => dir.patchQuery({ page })}
+            onPageSize={(pageSize) => dir.patchQuery({ pageSize, page: 1 })}
+            idPrefix="employee"
+            label="nhân sự"
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Dữ liệu từ <span className="mono">GET /api/v1/employees</span> (lọc{" "}
+        <span className="mono">q</span>, <span className="mono">status</span>,{" "}
+        <span className="mono">departmentName</span>, <span className="mono">jobTitle</span>). Danh
+        bạ không trả về thông tin tài khoản hay vai trò: vai trò hệ thống chỉ có EMPLOYEE và MANAGER,
+        còn <span className="mono">jobTitle</span> là thuộc tính công việc. Sắp xếp cố định theo
+        trạng thái rồi họ tên vì API không nhận tham số sắp xếp.
+      </p>
+
+      {dialog ? (
+        <Modal
+          title={dialog.mode === "edit" ? "Sửa hồ sơ nhân sự" : "Thêm nhân sự"}
+          onClose={() => setDialog(null)}
+          wide
+        >
+          <EmployeeForm
+            initial={dialog.mode === "edit" ? dialog.row : null}
+            submitLabel={dialog.mode === "edit" ? "Lưu thay đổi" : "Thêm nhân sự"}
+            onSubmit={saveEmployee}
+            onCancel={() => setDialog(null)}
+          />
         </Modal>
-      )}
+      ) : null}
+
+      {selected ? (
+        <ProfileSheet
+          employee={selected}
+          status={dir.statusOf(selected)}
+          actor={dir.actor}
+          canUpdate={canUpdate}
+          pending={dir.pendingId === selected.id}
+          onClose={() => setSelectedId(null)}
+          onEdit={() => {
+            setSelectedId(null);
+            setDialog({ mode: "edit", row: selected });
+          }}
+          onToggleStatus={() => void dir.toggleStatus(selected)}
+        />
+      ) : null}
     </div>
   );
 }

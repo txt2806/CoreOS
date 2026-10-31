@@ -1,190 +1,214 @@
 "use client";
-import { useState } from "react";
-import {
-  allocationInput,
-  allocationStatusSchema,
-  type AllocationDto,
-  type AllocationStatus,
-  type PeriodDto,
-} from "@/features/hr-management/employees/resource-capacity/types";
-import { allocationStatusLabels } from "@/features/hr-management/employees/resource-capacity/constants";
-import { client } from "@/features/hr-management/employees/resource-capacity/api/client";
-import { capacityChanged } from "@/features/hr-management/employees/resource-capacity/hooks/use-capacity";
-import {
-  Button,
-  Field,
-  Input,
-  Select,
-  Textarea,
-} from "@/features/hr-management/employees/resource-capacity/components/primitives/ui";
 
-type FieldErrors = Record<string, string>;
+import { useId, useState, type FormEvent } from "react";
+import { ApiError } from "../api/client";
+import { ALLOCATION_STATUS_LABEL, NOTE_LIMIT, PERCENT_MAX, PERCENT_MIN } from "../constants";
+/* The status list is the DTO enum itself, so the select can never drift from it. */
+import { ALLOCATION_STATUSES, type Allocation, type AllocationStatus } from "../types";
+import { Field, Select, TextArea, TextInput } from "./primitives";
 
-function errorsOf(issues: { path: PropertyKey[]; message: string }[]) {
-  const result: FieldErrors = {};
-  for (const issue of issues)
-    result[String(issue.path[0] ?? "form")] ??= issue.message;
-  return result;
+type DraftKey = "projectRef" | "percentage" | "status" | "note";
+type Draft = Record<DraftKey, string>;
+type Errors = Partial<Record<DraftKey, string>>;
+
+const KEYS: DraftKey[] = ["projectRef", "percentage", "status", "note"];
+
+function draftOf(allocation?: Allocation): Draft {
+  return {
+    projectRef: allocation?.projectRef ?? "",
+    percentage: String(allocation?.percentage ?? 100),
+    status: allocation?.status ?? "PLANNED",
+    note: allocation?.note ?? "",
+  };
 }
 
-export function AllocationForm({
-  record,
-  periods,
-  initialPeriodId,
-  notify,
-  onClose,
-}: {
-  record?: AllocationDto;
-  periods: PeriodDto[];
-  initialPeriodId?: string;
-  notify: (message: string) => void;
-  onClose: () => void;
-}) {
-  const [values, setValues] = useState({
-    periodId: record?.periodId ?? initialPeriodId ?? periods[0]?.id ?? "",
-    projectRef: record?.projectRef ?? "",
-    percentage: String(record?.percentage ?? 100),
-    status: (record?.status ?? "PLANNED") as AllocationStatus,
-    note: record?.note ?? "",
-  });
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [failure, setFailure] = useState("");
-  const [pending, setPending] = useState(false);
+function check(draft: Draft): Errors {
+  const errors: Errors = {};
+  const percentage = Number(draft.percentage);
+  if (!draft.projectRef.trim()) errors.projectRef = "Nhập tên hoặc mã dự án được phân bổ.";
+  else if (draft.projectRef.length > 200) errors.projectRef = "Tên dự án tối đa 200 ký tự.";
+  if (!Number.isFinite(percentage) || percentage < PERCENT_MIN || percentage > PERCENT_MAX)
+    errors.percentage = `Tỉ lệ trong khoảng ${PERCENT_MIN}–${PERCENT_MAX}%.`;
+  if (draft.note.length > NOTE_LIMIT) errors.note = `Ghi chú tối đa ${NOTE_LIMIT} ký tự.`;
+  return errors;
+}
 
-  async function submit(event: React.FormEvent) {
+export interface AllocationValues {
+  projectRef: string;
+  percentage: number;
+  status: AllocationStatus;
+  note: string;
+}
+
+interface AllocationFormProps {
+  initial?: Allocation;
+  submitLabel: string;
+  onSubmit: (values: AllocationValues) => Promise<void>;
+  onCancel?: () => void;
+}
+
+/**
+ * `projectRef` is free text in the DTO, so the field is a name, not a project
+ * picker: the API stores what is typed and nothing joins it to a project id.
+ */
+export function AllocationForm({ initial, submitLabel, onSubmit, onCancel }: AllocationFormProps) {
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const id = (key: DraftKey) => `allocation-${uid}-${key}`;
+  const [draft, setDraft] = useState<Draft>(() => draftOf(initial));
+  const [errors, setErrors] = useState<Errors>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const update = (key: DraftKey, value: string) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+    if (errors[key]) {
+      const next = check({ ...draft, [key]: value });
+      setErrors((current) => ({ ...current, [key]: next[key] }));
+    }
+  };
+
+  const blur = (key: DraftKey) => {
+    const next = check(draft);
+    setErrors((current) => ({ ...current, [key]: next[key] }));
+  };
+
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (pending) return;
-    setFailure("");
-    const percentage = Number(values.percentage);
-    const parsed = allocationInput.safeParse({ ...values, percentage });
-    if (!parsed.success) {
-      setErrors(errorsOf(parsed.error.issues));
+    const found = check(draft);
+    setErrors(found);
+    setFormError(null);
+    const first = KEYS.find((key) => found[key]);
+    if (first) {
+      document.getElementById(id(first))?.focus();
       return;
     }
-    setErrors({});
-    setPending(true);
+    setBusy(true);
     try {
-      if (record)
-        await client.updateAllocation(record, {
-          projectRef: parsed.data.projectRef,
-          percentage: parsed.data.percentage,
-          status: parsed.data.status,
-          note: parsed.data.note,
-        });
-      else await client.createAllocation(parsed.data);
-      capacityChanged();
-      notify(record ? "Đã cập nhật phân bổ dự án." : "Đã thêm phân bổ dự án.");
-      onClose();
-    } catch (cause) {
-      setFailure(
-        cause instanceof Error ? cause.message : "Không thể lưu phân bổ dự án",
-      );
+      await onSubmit({
+        projectRef: draft.projectRef.trim(),
+        percentage: Number(draft.percentage),
+        status: draft.status === "ACTIVE" || draft.status === "CANCELLED" ? draft.status : "PLANNED",
+        note: draft.note.trim(),
+      });
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        const mapped: Errors = {};
+        for (const issue of caught.issues) {
+          const key = issue.path.split(/[.[\]]/).filter(Boolean).pop() as
+            | DraftKey
+            | undefined;
+          if (key && KEYS.includes(key)) mapped[key] = issue.message;
+        }
+        setErrors(mapped);
+        setFormError(
+          Object.keys(mapped).length
+            ? "Một số trường chưa hợp lệ. Sửa theo gợi ý bên dưới rồi gửi lại."
+            : caught.message,
+        );
+      } else {
+        setFormError(caught instanceof Error ? caught.message : "Chưa lưu được phân bổ.");
+      }
     } finally {
-      setPending(false);
+      setBusy(false);
     }
-  }
-
-  const statuses = allocationStatusSchema.options;
+  };
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
-      {failure && (
-        <p className="error" role="alert">
-          {failure}
-        </p>
-      )}
-      <Field label="Kỳ công suất" error={errors.periodId}>
-        <Select
-          value={values.periodId}
-          onChange={(event) =>
-            setValues((current) => ({
-              ...current,
-              periodId: event.target.value,
-            }))
-          }
-          disabled={Boolean(record)}
-          required
-          aria-invalid={Boolean(errors.periodId)}
-        >
-          <option value="">Chọn kỳ công suất</option>
-          {periods.map((period) => (
-            <option key={period.id} value={period.id}>
-              {period.employeeName} · {period.fromDate} → {period.toDate}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <Field label="Dự án" error={errors.projectRef}>
-        <Input
-          value={values.projectRef}
-          onChange={(event) =>
-            setValues((current) => ({
-              ...current,
-              projectRef: event.target.value,
-            }))
-          }
-          maxLength={200}
-          required
-          aria-invalid={Boolean(errors.projectRef)}
-        />
-      </Field>
-      <div className="grid gap-3 sm:grid-cols-2">
+    <form className="stack gap-4" onSubmit={submit} noValidate>
+      {formError ? (
+        <div className="alert alert-danger" role="alert">
+          <span>{formError}</span>
+        </div>
+      ) : null}
+
+      <div className="field-grid">
         <Field
-          label="Tỷ lệ phân bổ (%)"
-          error={errors.percentage}
-          hint="Quá 100% sẽ cảnh báo quá tải, không chặn."
+          label="Dự án"
+          htmlFor={id("projectRef")}
+          required
+          error={errors.projectRef}
+          hint="Chuỗi tự do: API lưu đúng tên nhập vào, không liên kết mã dự án."
         >
-          <Input
-            type="number"
-            min={0}
-            max={200}
-            step={5}
-            value={values.percentage}
-            onChange={(event) =>
-              setValues((current) => ({
-                ...current,
-                percentage: event.target.value,
-              }))
-            }
-            required
-            aria-invalid={Boolean(errors.percentage)}
+          <TextInput
+            id={id("projectRef")}
+            value={draft.projectRef}
+            maxLength={200}
+            autoComplete="off"
+            invalid={Boolean(errors.projectRef)}
+            placeholder="OneOps – Cổng vận hành"
+            onChange={(event) => update("projectRef", event.target.value)}
+            onBlur={() => blur("projectRef")}
           />
         </Field>
-        <Field label="Trạng thái" error={errors.status}>
+
+        <Field
+          label="Tỉ lệ công suất"
+          htmlFor={id("percentage")}
+          required
+          error={errors.percentage}
+          hint={`Phần trăm giờ khả dụng của kỳ, tối đa ${PERCENT_MAX}%.`}
+        >
+          <TextInput
+            id={id("percentage")}
+            type="number"
+            className="input tabular"
+            step={5}
+            min={PERCENT_MIN}
+            max={PERCENT_MAX}
+            value={draft.percentage}
+            invalid={Boolean(errors.percentage)}
+            onChange={(event) => update("percentage", event.target.value)}
+            onBlur={() => blur("percentage")}
+          />
+        </Field>
+
+        <Field label="Trạng thái" htmlFor={id("status")} hint="Phân bổ đã huỷ không còn tính vào công suất.">
           <Select
-            value={values.status}
-            onChange={(event) =>
-              setValues((current) => ({
-                ...current,
-                status: event.target.value as AllocationStatus,
-              }))
-            }
+            id={id("status")}
+            value={draft.status}
+            onChange={(event) => update("status", event.target.value)}
           >
-            {statuses.map((status) => (
+            {ALLOCATION_STATUSES.map((status) => (
               <option key={status} value={status}>
-                {allocationStatusLabels[status]}
+                {ALLOCATION_STATUS_LABEL[status]}
               </option>
             ))}
           </Select>
         </Field>
       </div>
-      <Field label="Ghi chú" error={errors.note}>
-        <Textarea
-          value={values.note}
-          onChange={(event) =>
-            setValues((current) => ({ ...current, note: event.target.value }))
-          }
-          maxLength={500}
+
+      <Field
+        label="Ghi chú"
+        htmlFor={id("note")}
+        error={errors.note}
+        counter={`${draft.note.length}/${NOTE_LIMIT}`}
+      >
+        <TextArea
+          id={id("note")}
+          rows={3}
+          maxLength={NOTE_LIMIT}
+          value={draft.note}
+          invalid={Boolean(errors.note)}
+          onChange={(event) => update("note", event.target.value)}
+          onBlur={() => blur("note")}
         />
       </Field>
-      <footer className="flex justify-end gap-2">
-        <Button variant="secondary" onClick={onClose}>
-          Hủy
-        </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Đang lưu…" : record ? "Lưu thay đổi" : "Thêm phân bổ"}
-        </Button>
-      </footer>
+
+      <div className="row justify-end gap-2">
+        {onCancel ? (
+          <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
+            Huỷ
+          </button>
+        ) : null}
+        <button
+          type="submit"
+          className="btn btn-primary"
+          disabled={busy}
+          aria-busy={busy ? "true" : undefined}
+        >
+          {busy ? "Đang lưu…" : submitLabel}
+        </button>
+      </div>
     </form>
   );
 }

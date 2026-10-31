@@ -1,5 +1,10 @@
-export {
-  ModulePage,
-  CreateForm,
-} from "@/features/hr-management/organization/departments-teams/components/entrypoints";
-export { definition } from "@/features/hr-management/organization/departments-teams/constants";
+export { DepartmentsTeamsPage } from "./components/page";
+export type {
+  Department,
+  DepartmentInput,
+  DepartmentPatch,
+  OrgStatus,
+  Team,
+  TeamInput,
+  TeamPatch,
+} from "./types";

@@ -1,8 +1,12 @@
-import {
-  ModulePage,
-  definition,
-} from "@/features/hr-management/attendance/checkin-explanations";
-export const metadata = { title: definition.label };
+import type { Metadata } from "next";
+import { ExplanationsPage } from "@/features/hr-management/attendance/checkin-explanations";
+
+export const metadata: Metadata = {
+  title: "Giải trình chấm công · OneOps",
+  description:
+    "Gửi và duyệt yêu cầu bổ sung hoặc điều chỉnh giờ vào – giờ ra trong vòng ba ngày làm việc.",
+};
+
 export default function Page() {
-  return <ModulePage />;
+  return <ExplanationsPage />;
 }

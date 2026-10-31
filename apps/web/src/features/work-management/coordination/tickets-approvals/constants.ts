@@ -1,65 +1,64 @@
-type Field = {
-  key: string;
-  label: string;
-  type: string;
-  options?: readonly string[];
+import type { Quorum, SlaState, StepStatus, VoteDecision } from "./types";
+
+/** Exact key used by `@RequirePermission(FEATURE, …)` in the controller. */
+export const FEATURE_KEY = "work-management/coordination/tickets-approvals";
+
+export const PAGE_SIZES = [10, 20, 50] as const;
+export const DEFAULT_PAGE_SIZE = 20;
+
+/** The API names steps and votes in English; the UI never shows raw enums. */
+export const STEP_STATUS_LABEL: Record<StepStatus, string> = {
+  WAITING: "Chưa tới lượt",
+  PENDING: "Đang chờ quyết định",
+  APPROVED: "Đã duyệt",
+  REJECTED: "Từ chối",
+  SKIPPED: "Bỏ qua",
 };
-export const definition = {
-  id: "work-management/tickets-approvals",
-  icon: 6,
-  label: "Đề xuất",
-  title: "Đề xuất & phê duyệt",
-  singular: "đề xuất",
-  dateLabel: "Hạn xử lý",
-  personLabel: "Người duyệt",
-  tabs: [],
-  sections: [],
-  statuses: ["Chờ duyệt", "Đã duyệt", "Từ chối", "Đã hủy"],
-  fields: [
-    {
-      key: "category",
-      label: "Loại đề xuất",
-      type: "select",
-      options: ["Mua sắm", "Nghỉ phép", "Thanh toán", "Khác"],
-    },
-    {
-      key: "requester",
-      label: "Người đề xuất",
-      type: "text",
-    },
-    {
-      key: "amount",
-      label: "Số tiền dự kiến",
-      type: "number",
-    },
-  ],
-  navigation: {
-    title: "Đề xuất",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      {
-        label: "Tất cả",
-        href: "/work-management/tickets-approvals",
-      },
-      {
-        label: "Chờ duyệt",
-        href: "/work-management/tickets-approvals?status=Chờ duyệt&section=Chờ duyệt",
-      },
-      {
-        label: "Đã duyệt",
-        href: "/work-management/tickets-approvals?status=Đã duyệt&section=Đã duyệt",
-      },
-      {
-        label: "Từ chối",
-        href: "/work-management/tickets-approvals?status=Từ chối&section=Từ chối",
-      },
-      {
-        label: "Đã hủy",
-        href: "/work-management/tickets-approvals?status=Đã hủy&section=Đã hủy",
-      },
-    ],
-  },
-} as const;
-export const fields: readonly Field[] = definition.fields;
+
+export const STEP_STATUS_TONE: Record<StepStatus, string> = {
+  WAITING: "badge",
+  PENDING: "badge badge-warning",
+  APPROVED: "badge badge-success",
+  REJECTED: "badge badge-danger",
+  SKIPPED: "badge",
+};
+
+export const VOTE_LABEL: Record<VoteDecision, string> = {
+  PENDING: "Chưa bỏ phiếu",
+  APPROVED: "Đồng ý",
+  REJECTED: "Từ chối",
+};
+
+export const VOTE_TONE: Record<VoteDecision, string> = {
+  PENDING: "badge",
+  APPROVED: "badge badge-success",
+  REJECTED: "badge badge-danger",
+};
+
+export const SLA_LABEL: Record<SlaState, string> = {
+  ON_TRACK: "Đúng hạn",
+  DUE_SOON: "Sắp tới hạn",
+  OVERDUE: "Quá hạn",
+};
+
+export const SLA_TONE: Record<SlaState, string> = {
+  ON_TRACK: "badge badge-success",
+  DUE_SOON: "badge badge-warning",
+  OVERDUE: "badge badge-danger",
+};
+
+export const QUORUM_LABEL: Record<Quorum, string> = {
+  ANY: "Một người duyệt là đủ",
+  ALL: "Cần toàn bộ người duyệt",
+  MAJORITY: "Cần đa số người duyệt",
+};
+
+export const REQUEST_STATUS_TONE: Record<string, string> = {
+  "Chờ duyệt": "badge badge-warning",
+  "Đã duyệt": "badge badge-success",
+  "Từ chối": "badge badge-danger",
+  "Đã hủy": "badge",
+};
+
+/** A reject reason shorter than this is refused by the API. */
+export const MIN_REJECT_NOTE = 3;

@@ -1,99 +1,122 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/hr-management/attendance/attendance-reports/dto/attendance-reports.dto.ts`.
+ *
+ * The API aggregates only worked days, paid leave, unpaid leave and overtime hours.
+ * Late minutes, early-leave minutes, actual work minutes, missing checkouts and
+ * unexcused absences are not exposed by any endpoint, so this module never renders
+ * them — see the limited-metrics notice on the screen.
+ */
+export const PERIOD_STATUSES = ["DRAFT", "CLOSED"] as const;
+export type PeriodStatus = (typeof PERIOD_STATUSES)[number];
 
-export const statusSchema = z.enum(["DRAFT", "CLOSED"]);
+export interface AttendancePeriod {
+  id: string;
+  /** YYYY-MM; the server requires it to match the month of `fromDate`. */
+  periodKey: string;
+  name: string;
+  fromDate: string;
+  toDate: string;
+  status: PeriodStatus;
+  note: string;
+  lineCount: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
-const periodKey = z
-  .string()
-  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Kỳ công phải có dạng YYYY-MM");
-const days = z.number().min(0).max(31);
-const hours = z.number().min(0).max(400);
+export interface PeriodInput {
+  periodKey: string;
+  name: string;
+  fromDate: string;
+  toDate: string;
+  status: PeriodStatus;
+  note: string;
+}
 
-export const periodInput = z
-  .object({
-    periodKey,
-    name: z.string().trim().min(1, "Nhập tên kỳ công").max(150),
-    fromDate: dateKey,
-    toDate: dateKey,
-    status: statusSchema.default("DRAFT"),
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+export interface PeriodPatch {
+  name?: string;
+  fromDate?: string;
+  toDate?: string;
+  status?: PeriodStatus;
+  note?: string;
+  version: number;
+}
 
-export const periodSchema = z
-  .object({
-    id: z.uuid(),
-    periodKey: z.string(),
-    name: z.string(),
-    fromDate: z.string(),
-    toDate: z.string(),
-    status: statusSchema,
-    note: z.string(),
-    lineCount: z.number().int().min(0),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface PeriodLine {
+  id: string;
+  periodId: string;
+  employeeId: string;
+  employeeName: string;
+  /** Days, 0…31 each; the three together must not exceed 31. */
+  workedDays: number;
+  paidLeaveDays: number;
+  unpaidLeaveDays: number;
+  /** Hours, 0…400. */
+  overtimeHours: number;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const lineInput = z
-  .object({
-    periodId: z.uuid(),
-    employeeId: z.string().trim().min(1, "Nhập mã nhân sự").max(64),
-    employeeName: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-    workedDays: days.default(0),
-    paidLeaveDays: days.default(0),
-    unpaidLeaveDays: days.default(0),
-    overtimeHours: hours.default(0),
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+export interface LineInput {
+  periodId: string;
+  employeeId: string;
+  employeeName: string;
+  workedDays: number;
+  paidLeaveDays: number;
+  unpaidLeaveDays: number;
+  overtimeHours: number;
+  note: string;
+}
 
-export const lineSchema = z
-  .object({
-    id: z.uuid(),
-    periodId: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    workedDays: z.number(),
-    paidLeaveDays: z.number(),
-    unpaidLeaveDays: z.number(),
-    overtimeHours: z.number(),
-    note: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface LinePatch {
+  employeeName?: string;
+  workedDays?: number;
+  paidLeaveDays?: number;
+  unpaidLeaveDays?: number;
+  overtimeHours?: number;
+  note?: string;
+  version: number;
+}
 
-export const summarySchema = z.object({
-  periodId: z.uuid(),
-  headcount: z.number().int().min(0),
-  workedDays: z.number(),
-  paidLeaveDays: z.number(),
-  unpaidLeaveDays: z.number(),
-  overtimeHours: z.number(),
-});
+/** Shape of `GET /attendance-reports/periods/:id/summary`. */
+export interface PeriodSummary {
+  periodId: string;
+  headcount: number;
+  workedDays: number;
+  paidLeaveDays: number;
+  unpaidLeaveDays: number;
+  overtimeHours: number;
+}
 
-export const periodListSchema = z.object({
-  items: z.array(periodSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
-export const lineListSchema = z.object({
-  items: z.array(lineSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+  };
+}
 
-export type Status = z.infer<typeof statusSchema>;
-export type PeriodDto = z.infer<typeof periodSchema>;
-export type PeriodInput = z.input<typeof periodInput>;
-export type LineDto = z.infer<typeof lineSchema>;
-export type LineInput = z.input<typeof lineInput>;
-export type Summary = z.infer<typeof summarySchema>;
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}

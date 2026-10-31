@@ -1,149 +1,203 @@
-import type { z } from "zod";
-import {
-  applyInput,
-  applyResultSchema,
-  assignmentInput,
-  assignmentSchema,
-  bulkInput,
-  bulkResultSchema,
-  listSchema,
-  patternInput,
-  patternSchema,
-  shiftInput,
-  shiftSchema,
-  type ApplyInput,
-  type AssignmentDto,
-  type AssignmentInput,
-  type BulkInput,
-  type PatternDto,
-  type PatternInput,
-  type ShiftDto,
-  type ShiftInput,
-} from "@/features/hr-management/attendance/shifts-schedules/types";
+import type {
+  ApplyPatternInput,
+  AssignmentInput,
+  AssignmentPatch,
+  BulkInput,
+  BulkResult,
+  PageResult,
+  PatternInput,
+  PatternPatch,
+  PermissionsMe,
+  ScheduleAssignment,
+  SchedulePattern,
+  Session,
+  ShiftInput,
+  ShiftPatch,
+  ShiftStatus,
+  ShiftTemplate,
+} from "../types";
 
+/**
+ * Every call goes through the same-origin proxy, so the HttpOnly session cookie
+ * travels with the request and no CORS preflight is involved.
+ */
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
+
+  constructor(status: number, message: string, issues: { path: string; message: string }[] = []) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
   }
 }
 
-async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {},
-  schema?: z.ZodType<T>,
-): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-    cache: "no-store",
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok)
-    throw new ApiError(
-      response.status,
-      typeof body?.message === "string"
-        ? body.message
-        : "Không thể kết nối API. Vui lòng thử lại.",
-    );
-  return schema ? schema.parse(body) : (body as T);
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
 }
 
-const query = (params: Record<string, string>) =>
-  new URLSearchParams({ pageSize: "100", ...params }).toString();
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+    });
+  } catch {
+    throw new ApiError(0, "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.");
+  }
 
-const shiftList = listSchema(shiftSchema);
-const patternList = listSchema(patternSchema);
-const assignmentList = listSchema(assignmentSchema);
+  if (response.status === 204) return undefined as T;
 
-export const client = {
-  listShifts: (params: Record<string, string>, signal?: AbortSignal) =>
-    apiRequest(
-      `/shifts-schedules/shifts?${query(params)}`,
-      { signal },
-      shiftList,
-    ),
-  createShift: (input: ShiftInput) =>
-    apiRequest(
-      "/shifts-schedules/shifts",
-      { method: "POST", body: JSON.stringify(shiftInput.parse(input)) },
-      shiftSchema,
-    ),
-  updateShift: (record: ShiftDto, input: ShiftInput) =>
-    apiRequest(
-      `/shifts-schedules/shifts/${record.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...shiftInput.parse(input),
-          version: record.version,
-        }),
-      },
-      shiftSchema,
-    ),
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
 
-  listPatterns: (params: Record<string, string>, signal?: AbortSignal) =>
-    apiRequest(
-      `/shifts-schedules/patterns?${query(params)}`,
-      { signal },
-      patternList,
-    ),
-  createPattern: (input: PatternInput) =>
-    apiRequest(
-      "/shifts-schedules/patterns",
-      { method: "POST", body: JSON.stringify(patternInput.parse(input)) },
-      patternSchema,
-    ),
-  updatePattern: (record: PatternDto, input: PatternInput) =>
-    apiRequest(
-      `/shifts-schedules/patterns/${record.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...patternInput.parse(input),
-          version: record.version,
-        }),
-      },
-      patternSchema,
-    ),
-  applyPattern: (record: PatternDto, input: ApplyInput) =>
-    apiRequest(
-      `/shifts-schedules/patterns/${record.id}/apply`,
-      { method: "POST", body: JSON.stringify(applyInput.parse(input)) },
-      applyResultSchema,
-    ),
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
+    );
+  }
 
-  listAssignments: (params: Record<string, string>, signal?: AbortSignal) =>
-    apiRequest(
-      `/shifts-schedules/assignments?${query(params)}`,
-      { signal },
-      assignmentList,
-    ),
-  createAssignment: (input: AssignmentInput) =>
-    apiRequest(
-      "/shifts-schedules/assignments",
-      { method: "POST", body: JSON.stringify(assignmentInput.parse(input)) },
-      assignmentSchema,
-    ),
-  bulkAssign: (input: BulkInput) =>
-    apiRequest(
-      "/shifts-schedules/assignments/bulk",
-      { method: "POST", body: JSON.stringify(bulkInput.parse(input)) },
-      bulkResultSchema,
-    ),
-  updateAssignment: (
-    record: AssignmentDto,
-    patch: { shiftId?: string; employeeName?: string; note?: string },
-  ) =>
-    apiRequest(
-      `/shifts-schedules/assignments/${record.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ ...patch, version: record.version }),
-      },
-      assignmentSchema,
-    ),
-};
+  return body as T;
+}
+
+export interface ScheduleListQuery {
+  page: number;
+  pageSize: number;
+  q?: string;
+  status?: ShiftStatus | "";
+  employeeId?: string;
+  from?: string;
+  to?: string;
+}
+
+function toSearch(query: ScheduleListQuery, includeStatus: boolean): string {
+  const search = new URLSearchParams({
+    page: String(query.page),
+    pageSize: String(query.pageSize),
+  });
+  if (query.q?.trim()) search.set("q", query.q.trim());
+  if (includeStatus && query.status) search.set("status", query.status);
+  if (query.employeeId) search.set("employeeId", query.employeeId);
+  if (query.from) search.set("from", query.from);
+  if (query.to) search.set("to", query.to);
+  return search.toString();
+}
+
+export function listShifts(query: ScheduleListQuery) {
+  return request<PageResult<ShiftTemplate>>(
+    `/shifts-schedules/shifts?${toSearch(query, true)}`,
+  );
+}
+
+export function shiftTotal(status: ShiftStatus) {
+  const search = new URLSearchParams({ page: "1", pageSize: "1", status });
+  return request<PageResult<ShiftTemplate>>(
+    `/shifts-schedules/shifts?${search.toString()}`,
+  ).then((result) => result.total);
+}
+
+export function createShift(input: ShiftInput) {
+  return request<ShiftTemplate>("/shifts-schedules/shifts", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateShift(id: string, patch: ShiftPatch) {
+  return request<ShiftTemplate>(`/shifts-schedules/shifts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function listPatterns(query: ScheduleListQuery) {
+  return request<PageResult<SchedulePattern>>(
+    `/shifts-schedules/patterns?${toSearch(query, true)}`,
+  );
+}
+
+export function patternTotal() {
+  return request<PageResult<SchedulePattern>>(
+    "/shifts-schedules/patterns?page=1&pageSize=1",
+  ).then((result) => result.total);
+}
+
+export function createPattern(input: PatternInput) {
+  return request<SchedulePattern>("/shifts-schedules/patterns", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updatePattern(id: string, patch: PatternPatch) {
+  return request<SchedulePattern>(`/shifts-schedules/patterns/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function applyPattern(id: string, input: ApplyPatternInput) {
+  return request<BulkResult>(`/shifts-schedules/patterns/${id}/apply`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/** Assignments carry no status column, so the status filter is left out. */
+export function listAssignments(query: ScheduleListQuery) {
+  return request<PageResult<ScheduleAssignment>>(
+    `/shifts-schedules/assignments?${toSearch(query, false)}`,
+  );
+}
+
+export function assignmentTotal() {
+  return request<PageResult<ScheduleAssignment>>(
+    "/shifts-schedules/assignments?page=1&pageSize=1",
+  ).then((result) => result.total);
+}
+
+export function createAssignment(input: AssignmentInput) {
+  return request<ScheduleAssignment>("/shifts-schedules/assignments", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function bulkAssign(input: BulkInput) {
+  return request<BulkResult>("/shifts-schedules/assignments/bulk", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateAssignment(id: string, patch: AssignmentPatch) {
+  return request<ScheduleAssignment>(`/shifts-schedules/assignments/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function session() {
+  return request<Session>("/auth/session");
+}
+
+export function permissionsMe() {
+  return request<PermissionsMe>("/permissions/me");
+}
+
+export function actionsOf(body: PermissionsMe, featureKey: string): string[] {
+  return body.items.find((item) => item.featureKey === featureKey)?.actions ?? [];
+}

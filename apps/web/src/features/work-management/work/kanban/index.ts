@@ -1,2 +1,2 @@
-export { KanbanBoard } from "./components/kanban-board";
-export type { BoardMove, BoardTask } from "./types";
+export { KanbanBoard } from "./components/board";
+export type { BoardMove, BoardTask, KanbanBoardProps } from "./types";

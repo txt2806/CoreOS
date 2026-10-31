@@ -1,57 +1,38 @@
-import { z } from "zod";
+/** Mirrors `apps/api/src/features/tenant-system/access-control/tenant-auth/dto/tenant-auth.dto.ts`. */
+export interface LoginInput {
+  username: string;
+  password: string;
+}
 
-export const actorSchema = z
-  .object({
-    accountId: z.uuid(),
-    employeeId: z.string(),
-    displayName: z.string(),
-    role: z.enum(["EMPLOYEE", "MANAGER"]),
-    isSystemAdmin: z.boolean(),
-    sessionId: z.uuid(),
-    username: z.string(),
-    mustChangePassword: z.boolean(),
-  })
-  .strict();
+export type AccountRole = "EMPLOYEE" | "MANAGER";
 
-export const setupSchema = z.object({
-  needsSetup: z.boolean(),
-  idleMinutes: z.number(),
-});
+/** `actorSchema` — the signed-in identity returned with every session answer. */
+export interface SessionActor {
+  accountId: string;
+  employeeId: string;
+  username: string;
+  displayName: string;
+  role: AccountRole;
+  isSystemAdmin: boolean;
+  /** Set when an administrator reset the password; the account still works. */
+  mustChangePassword: boolean;
+  sessionId: string;
+}
 
-export const sessionSchema = z.object({
-  actor: actorSchema,
-  idleMinutes: z.number(),
-  expiresAt: z.iso.datetime(),
-});
+/** `sessionResultSchema` — both `POST /auth/login` and `GET /auth/session`. */
+export interface SessionResult {
+  actor: SessionActor;
+  idleMinutes: number;
+  expiresAt: string;
+}
 
-export const credentialSchema = z.object({
-  username: z.string().trim().min(3, "Tên đăng nhập từ 3 ký tự").max(80),
-  password: z
-    .string()
-    .min(8, "Mật khẩu tối thiểu 8 ký tự")
-    .max(72, "Mật khẩu tối đa 72 ký tự"),
-});
+/** `GET /auth/setup` — public probe used to explain a first-run tenant. */
+export interface SetupState {
+  needsSetup: boolean;
+  idleMinutes: number;
+}
 
-export const firstAdminSchema = credentialSchema.extend({
-  displayName: z.string().trim().min(1, "Nhập tên hiển thị").max(200),
-});
-
-export const passwordChangeSchema = z
-  .object({
-    currentPassword: z.string().min(1, "Nhập mật khẩu hiện tại"),
-    newPassword: z
-      .string()
-      .min(8, "Mật khẩu tối thiểu 8 ký tự")
-      .max(72, "Mật khẩu tối đa 72 ký tự"),
-  })
-  .refine((value) => value.newPassword !== value.currentPassword, {
-    message: "Mật khẩu mới phải khác mật khẩu hiện tại",
-    path: ["newPassword"],
-  });
-
-export type Actor = z.infer<typeof actorSchema>;
-export type Session = z.infer<typeof sessionSchema>;
-export type SetupState = z.infer<typeof setupSchema>;
-export type Credential = z.infer<typeof credentialSchema>;
-export type FirstAdmin = z.infer<typeof firstAdminSchema>;
-export type PasswordChange = z.infer<typeof passwordChangeSchema>;
+export interface PasswordChangeInput {
+  currentPassword: string;
+  newPassword: string;
+}

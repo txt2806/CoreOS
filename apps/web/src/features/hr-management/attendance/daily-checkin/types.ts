@@ -1,52 +1,78 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/hr-management/attendance/daily-checkin/dto/daily-checkin.dto.ts`.
+ * Only fields the API returns are declared here.
+ */
+export const ATTENDANCE_STATUSES = ["OPEN", "COMPLETE", "LOCKED"] as const;
+export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 
-export const statusSchema = z.enum(["OPEN", "COMPLETE", "LOCKED"]);
-export const sourceSchema = z.enum(["WEB", "MOBILE", "KIOSK", "MANUAL"]);
+export const ATTENDANCE_SOURCES = ["WEB", "MOBILE", "KIOSK", "MANUAL"] as const;
+export type AttendanceSource = (typeof ATTENDANCE_SOURCES)[number];
 
-const clockTime = z
-  .string()
-  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Giờ phải có dạng HH:mm");
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+export interface AttendanceRecord {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  /** YYYY-MM-DD. */
+  workDate: string;
+  /** HH:mm. */
+  checkIn: string;
+  /** HH:mm, null while the person has not checked out. */
+  checkOut: string | null;
+  source: AttendanceSource;
+  note: string;
+  status: AttendanceStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const recordInput = z
-  .object({
-    employeeId: z.string().trim().min(1, "Chọn nhân sự").max(64),
-    employeeName: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-    workDate: dateKey,
-    checkIn: clockTime,
-    checkOut: clockTime.nullish(),
-    source: sourceSchema.default("WEB"),
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+export interface AttendanceInput {
+  employeeId: string;
+  employeeName: string;
+  workDate: string;
+  checkIn: string;
+  checkOut?: string | null;
+  source: AttendanceSource;
+  note: string;
+}
 
-export const recordSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string().max(64),
-    employeeName: z.string().max(200),
-    workDate: z.string(),
-    checkIn: z.string(),
-    checkOut: z.string().nullable(),
-    source: sourceSchema,
-    note: z.string(),
-    status: statusSchema,
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface AttendancePatch {
+  checkIn?: string;
+  checkOut?: string | null;
+  note?: string;
+  version: number;
+}
 
-export const listSchema = z.object({
-  items: z.array(recordSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
-export type Status = z.infer<typeof statusSchema>;
-export type Source = z.infer<typeof sourceSchema>;
-export type AttendanceDto = z.infer<typeof recordSchema>;
-export type AttendanceInput = z.input<typeof recordInput>;
+/** Shape of `GET /auth/session`, the only source of the signed-in employee. */
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+  };
+}
+
+/** Shape of `GET /permissions/me`. */
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+/** The slice of `PermissionsMe` this screen keeps: actions for its own key. */
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}

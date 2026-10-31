@@ -1,142 +1,89 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/tenant-system/organization/work-policies/dto/work-policies.dto.ts`.
+ * The DTO carries no effective date, so the screen must not promise one.
+ */
+export type Status = "ACTIVE" | "INACTIVE";
 
-export const statusSchema = z.enum(["ACTIVE", "INACTIVE"]);
-const clockTime = z
-  .string()
-  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Giờ phải có dạng HH:mm");
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
-const ipv4 = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
-const cidr = z
-  .string()
-  .trim()
-  .min(1, "Nhập địa chỉ IP hoặc dải mạng")
-  .max(64)
-  .regex(
-    new RegExp(`^${ipv4}(\\.${ipv4}){3}(/(3[0-2]|[12]?\\d))?$`),
-    "Nhập IPv4 hợp lệ, ví dụ 203.0.113.10 hoặc 203.0.113.0/24",
-  );
+export interface Policy {
+  id: string;
+  timezone: string;
+  /** `HH:mm` — the DTO validates the shape, it is never a Date. */
+  workStart: string;
+  workEnd: string;
+  breakMinutes: number;
+  lateGraceMinutes: number;
+  /** ISO weekday numbers, 1 = Monday … 7 = Sunday, sorted by the server. */
+  workDays: number[];
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-// Patch gửi lên không mang default: Zod giữ default qua `.partial()` nên field
-// bị bỏ trống sẽ bị ghi đè về giá trị mặc định.
-const policyFields = {
-  timezone: z.string().trim().min(1, "Nhập múi giờ").max(64),
-  workStart: clockTime,
-  workEnd: clockTime,
-  breakMinutes: z.number().int().min(0).max(240),
-  lateGraceMinutes: z.number().int().min(0).max(120),
-  workDays: z
-    .array(z.number().int().min(1).max(7))
-    .min(1, "Chọn ít nhất một ngày làm việc")
-    .max(7)
-    .refine(
-      (days) => new Set(days).size === days.length,
-      "Ngày làm việc không được trùng",
-    ),
-};
-export const policyPatch = z
-  .object(policyFields)
-  .partial()
-  .extend({ version: z.number().int().positive() })
-  .strict();
+export type PolicyFields = Pick<
+  Policy,
+  "timezone" | "workStart" | "workEnd" | "breakMinutes" | "lateGraceMinutes" | "workDays"
+>;
 
-const holidayFields = {
-  date: dateKey,
-  name: z.string().trim().min(1, "Nhập tên ngày lễ").max(200),
-  paid: z.boolean(),
-  note: z.string().trim().max(500),
-  status: statusSchema,
-};
-export const holidayInput = z
-  .object({
-    ...holidayFields,
-    paid: holidayFields.paid.default(true),
-    note: holidayFields.note.default(""),
-    status: holidayFields.status.default("ACTIVE"),
-  })
-  .strict();
+/** `updatePolicySchema` is `.partial()` plus the mandatory version. */
+export type PolicyPatch = Partial<PolicyFields> & { version: number };
 
-const networkFields = {
-  label: z.string().trim().min(1, "Nhập tên mạng").max(150),
-  cidr,
-  note: z.string().trim().max(500),
-  status: statusSchema,
-};
-export const networkInput = z
-  .object({
-    ...networkFields,
-    note: networkFields.note.default(""),
-    status: networkFields.status.default("ACTIVE"),
-  })
-  .strict();
+export interface Holiday {
+  id: string;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  name: string;
+  paid: boolean;
+  note: string;
+  status: Status;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-const quotaFields = {
-  year: z.number().int().min(2000).max(2100),
-  daysPerYear: z.number().int().min(0).max(366),
-  maxCarryOverDays: z.number().int().min(0).max(366),
-  note: z.string().trim().max(500),
-};
-export const quotaInput = z
-  .object({
-    ...quotaFields,
-    daysPerYear: quotaFields.daysPerYear.default(12),
-    maxCarryOverDays: quotaFields.maxCarryOverDays.default(0),
-    note: quotaFields.note.default(""),
-  })
-  .strict();
+export type HolidayInput = Pick<Holiday, "date" | "name" | "paid" | "note" | "status">;
+export type HolidayPatch = Partial<HolidayInput> & { version: number };
 
-export const policySchema = z
-  .object({
-    ...policyFields,
-    id: z.uuid(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export const holidaySchema = z
-  .object({
-    ...holidayFields,
-    id: z.uuid(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export const networkSchema = z
-  .object({
-    ...networkFields,
-    id: z.uuid(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export const quotaSchema = z
-  .object({
-    ...quotaFields,
-    id: z.uuid(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+export interface Network {
+  id: string;
+  label: string;
+  cidr: string;
+  note: string;
+  status: Status;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const listSchema = <T extends z.ZodType>(item: T) =>
-  z.object({
-    items: z.array(item),
-    total: z.number(),
-    page: z.number(),
-    pageSize: z.number(),
-  });
+export type NetworkInput = Pick<Network, "label" | "cidr" | "note" | "status">;
+export type NetworkPatch = Partial<NetworkInput> & { version: number };
 
-export type Status = z.infer<typeof statusSchema>;
-export type PolicyDto = z.infer<typeof policySchema>;
-export type PolicyPatch = z.infer<typeof policyPatch>;
-export type HolidayDto = z.infer<typeof holidaySchema>;
-export type HolidayInput = z.input<typeof holidayInput>;
-export type NetworkDto = z.infer<typeof networkSchema>;
-export type NetworkInput = z.input<typeof networkInput>;
-export type QuotaDto = z.infer<typeof quotaSchema>;
-export type QuotaInput = z.input<typeof quotaInput>;
+export interface Quota {
+  id: string;
+  year: number;
+  daysPerYear: number;
+  maxCarryOverDays: number;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Leave quotas carry no status: they are edited, never switched off. */
+export type QuotaInput = Pick<Quota, "year" | "daysPerYear" | "maxCarryOverDays" | "note">;
+export type QuotaPatch = Partial<QuotaInput> & { version: number };
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** `listQuery` — `year` only reaches holidays and quotas on the server. */
+export interface ListQuery {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  status?: Status;
+  year?: number;
+}

@@ -1,73 +1,105 @@
-import { z } from "zod";
+/**
+ * Mirrors the DTOs behind `GET /leaves/workflow/queue`,
+ * `POST /leaves/workflow/queue/:requestId/decision` and `GET /leave-approvals`.
+ */
+export const DECISION_STATUSES = ["APPROVED", "REJECTED"] as const;
+export type DecisionStatus = (typeof DECISION_STATUSES)[number];
 
-export const decisionStatusSchema = z.enum(["APPROVED", "REJECTED"]);
-export const leaveTypeSchema = z.enum(["ANNUAL", "SICK", "UNPAID", "OTHER"]);
+/* Re-declared here rather than imported: a feature may only read its own folder. */
+export type LeaveType = "ANNUAL" | "SICK" | "UNPAID" | "OTHER";
+export type LeaveStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
 
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+/** The queue reuses the leave-request DTO — the service returns it untouched. */
+export interface QueueItem {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  leaveType: LeaveType;
+  fromDate: string;
+  toDate: string;
+  days: number;
+  reason: string;
+  status: LeaveStatus;
+  decidedBy: string;
+  decidedAt: string | null;
+  decisionNote: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const decisionInput = z
-  .object({
-    status: decisionStatusSchema,
-    note: z.string().trim().max(500).default(""),
-  })
-  .strict();
+/** `decisionBody` is strict: only `status` and `note` travel. */
+export interface DecisionInput {
+  status: DecisionStatus;
+  note: string;
+}
 
-export const queueItemSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    leaveType: leaveTypeSchema,
-    fromDate: dateKey,
-    toDate: dateKey,
-    days: z.number(),
-    reason: z.string(),
-    status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]),
-    decidedBy: z.string(),
-    decidedAt: z.iso.datetime().nullable(),
-    decisionNote: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+/** One stored row of the approval history (`/leave-approvals`). */
+export interface Decision {
+  id: string;
+  requestId: string;
+  employeeId: string;
+  employeeName: string;
+  leaveType: LeaveType;
+  fromDate: string;
+  toDate: string;
+  days: number;
+  reason: string;
+  status: DecisionStatus;
+  decidedBy: string;
+  decisionNote: string;
+  decidedAt: string;
+  createdAt: string;
+}
 
-export const queueSchema = z.array(queueItemSchema);
+/** `decide()` answers with both records so the caller can echo the stored result. */
+export interface DecisionResult {
+  request: QueueItem;
+  decision: Decision;
+}
 
-export const decisionSchema = z
-  .object({
-    id: z.uuid(),
-    requestId: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    leaveType: leaveTypeSchema,
-    fromDate: z.string(),
-    toDate: z.string(),
-    days: z.number(),
-    reason: z.string(),
-    status: decisionStatusSchema,
-    decidedBy: z.string(),
-    decisionNote: z.string(),
-    decidedAt: z.iso.datetime(),
-    createdAt: z.iso.datetime(),
-  })
-  .strict();
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
-export const decisionResultSchema = z.object({
-  request: queueItemSchema,
-  decision: decisionSchema,
-});
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}
 
-export const historySchema = z.object({
-  items: z.array(decisionSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
 
-export type DecisionStatus = z.infer<typeof decisionStatusSchema>;
-export type LeaveType = z.infer<typeof leaveTypeSchema>;
-export type QueueItem = z.infer<typeof queueItemSchema>;
-export type DecisionDto = z.infer<typeof decisionSchema>;
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+    mustChangePassword: boolean;
+  };
+  idleMinutes: number;
+  expiresAt: string;
+}
+
+/** `GET /work-policies/quotas` — the tenant-wide annual allowance. */
+export interface LeaveQuota {
+  id: string;
+  year: number;
+  daysPerYear: number;
+  maxCarryOverDays: number;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}

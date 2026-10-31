@@ -1,2 +1,2 @@
-export { ModulePage, CreateForm } from "./components/entrypoints";
-export { definition } from "./constants";
+export { EmployeeDirectoryPage } from "./components/page";
+export type { Employee, EmployeeInput, EmployeePatch, EmployeeStatus } from "./types";

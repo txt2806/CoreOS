@@ -1,30 +1,90 @@
-import {
-  auditEntrySchema,
-  auditFacetsSchema,
-  auditPageSchema,
-  type ListQuery,
-} from "@/features/tenant-system/checklog/types";
-import { apiRequest } from "@/features/tenant-system/checklog/api/http";
+import type { AuditFacets, AuditPage, AuditResult } from "../types";
 
-const base = "/checklog";
+/**
+ * Every call goes through the same-origin proxy, so the HttpOnly session cookie
+ * travels with the request and no CORS preflight is involved.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
 
-/** Only non-empty filters reach the API: the list query schema is strict. */
-function search(query: ListQuery): string {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (key === "page" || key === "pageSize" || value === "") continue;
-    params.set(key, String(value));
+  constructor(status: number, message: string, issues: { path: string; message: string }[] = []) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
   }
-  params.set("page", String(query.page));
-  params.set("pageSize", String(query.pageSize));
-  return params.toString();
 }
 
-export const client = {
-  list: (query: ListQuery, signal?: AbortSignal) =>
-    apiRequest(`${base}?${search(query)}`, { signal }, auditPageSchema),
-  facets: (signal?: AbortSignal) =>
-    apiRequest(`${base}/facets`, { signal }, auditFacetsSchema),
-  entry: (id: string, signal?: AbortSignal) =>
-    apiRequest(`${base}/${id}`, { signal }, auditEntrySchema),
-};
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+    });
+  } catch {
+    throw new ApiError(0, "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.");
+  }
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
+    );
+  }
+
+  return body as T;
+}
+
+export interface AuditListQuery {
+  page: number;
+  pageSize: number;
+  q?: string;
+  feature?: string;
+  action?: string;
+  actor?: string;
+  result?: AuditResult | "";
+  override?: boolean;
+  from?: string;
+  to?: string;
+}
+
+export function listAudit(query: AuditListQuery) {
+  const search = new URLSearchParams({
+    page: String(query.page),
+    pageSize: String(query.pageSize),
+  });
+  if (query.q?.trim()) search.set("q", query.q.trim());
+  if (query.feature) search.set("feature", query.feature);
+  if (query.action) search.set("action", query.action);
+  if (query.actor?.trim()) search.set("actor", query.actor.trim());
+  if (query.result) search.set("result", query.result);
+  if (query.override) search.set("override", "true");
+  if (query.from) search.set("from", query.from);
+  if (query.to) search.set("to", query.to);
+  return request<AuditPage>(`/checklog?${search.toString()}`);
+}
+
+export function auditFacets() {
+  return request<AuditFacets>("/checklog/facets");
+}

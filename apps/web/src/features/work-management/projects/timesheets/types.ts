@@ -1,145 +1,111 @@
-import { z } from "zod";
-
-export const PERIOD_STATUSES = [
-  "OPEN",
-  "SUBMITTED",
-  "APPROVED",
-  "REJECTED",
-] as const;
-export const periodStatusSchema = z.enum(PERIOD_STATUSES);
+/**
+ * Mirrors `apps/api/src/features/work-management/projects/timesheets/dto/timesheets.dto.ts`.
+ * Minutes are integers throughout; money never appears because the API exposes no
+ * rate or amount — `billable` is only a flag.
+ */
+export const PERIOD_STATUSES = ["OPEN", "SUBMITTED", "APPROVED", "REJECTED"] as const;
 export type PeriodStatus = (typeof PERIOD_STATUSES)[number];
 
-/** Minutes are captured in 15-minute steps and capped by a working day. */
-export const MINUTE_STEP = 15;
-export const DAY_LIMIT_MINUTES = 720;
-export const DAY_THRESHOLD_MINUTES = 480;
-export const WEEK_THRESHOLD_MINUTES = 2400;
+/** Entry writing is allowed only while the week is open or was sent back. */
+export const EDITABLE_STATUSES: PeriodStatus[] = ["OPEN", "REJECTED"];
 
-/** A week can be edited while it is open or after a rejection. */
-export const EDITABLE_STATUSES: readonly PeriodStatus[] = ["OPEN", "REJECTED"];
+export interface Period {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  weekStart: string;
+  weekEnd: string;
+  status: PeriodStatus;
+  totalMinutes: number;
+  overThreshold: boolean;
+  submittedAt: string | null;
+  decidedAt: string | null;
+  decidedByName: string;
+  decisionNote: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const periodSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    weekStart: z.iso.date(),
-    weekEnd: z.iso.date(),
-    status: periodStatusSchema,
-    totalMinutes: z.number().int(),
-    overThreshold: z.boolean(),
-    submittedAt: z.iso.datetime().nullable(),
-    decidedAt: z.iso.datetime().nullable(),
-    decidedByName: z.string(),
-    decisionNote: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export type PeriodDto = z.infer<typeof periodSchema>;
+export interface TimeEntry {
+  id: string;
+  periodId: string;
+  employeeId: string;
+  projectId: string | null;
+  taskId: string | null;
+  workDate: string;
+  minutes: number;
+  note: string;
+  billable: boolean;
+  status: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const entrySchema = z
-  .object({
-    id: z.uuid(),
-    periodId: z.uuid(),
-    employeeId: z.string(),
-    projectId: z.uuid().nullable(),
-    taskId: z.uuid().nullable(),
-    workDate: z.iso.date(),
-    minutes: z.number().int(),
-    note: z.string(),
-    billable: z.boolean(),
-    status: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
-export type TimeEntry = z.infer<typeof entrySchema>;
+/** Corrections after approval append a row; the original entry is never edited. */
+export interface EntryAdjustment {
+  id: string;
+  entryId: string;
+  periodId: string;
+  deltaMinutes: number;
+  note: string;
+  adjustedByName: string;
+  createdAt: string;
+}
 
-export const adjustmentSchema = z
-  .object({
-    id: z.uuid(),
-    entryId: z.uuid(),
-    periodId: z.uuid(),
-    deltaMinutes: z.number().int(),
-    note: z.string(),
-    adjustedByName: z.string(),
-    createdAt: z.iso.datetime(),
-  })
-  .strict();
-export type Adjustment = z.infer<typeof adjustmentSchema>;
+/** `GET /timesheets/periods/:id` and every write on a period return this shape. */
+export interface PeriodDetail extends Period {
+  entries: TimeEntry[];
+  adjustments: EntryAdjustment[];
+}
 
-export const periodDetailSchema = periodSchema.extend({
-  entries: z.array(entrySchema),
-  adjustments: z.array(adjustmentSchema),
-});
-export type PeriodDetail = z.infer<typeof periodDetailSchema>;
+export interface EntryInput {
+  workDate: string;
+  minutes: number;
+  /** Attribution is optional in the DTO; the screen only sends what the user picked. */
+  projectId?: string;
+  taskId?: string;
+  note: string;
+  billable: boolean;
+}
 
-export const periodPageSchema = z.object({
-  items: z.array(periodSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface EntryPatch {
+  workDate?: string;
+  minutes?: number;
+  projectId?: string | null;
+  taskId?: string | null;
+  note?: string;
+  billable?: boolean;
+  version: number;
+}
 
-export const entryInputSchema = z
-  .object({
-    workDate: z.iso.date(),
-    minutes: z
-      .number()
-      .int()
-      .min(MINUTE_STEP, "Thời lượng tối thiểu 15 phút.")
-      .max(DAY_LIMIT_MINUTES, "Một ngày không vượt quá 12 giờ.")
-      .refine(
-        (minutes) => minutes % MINUTE_STEP === 0,
-        "Thời lượng phải theo bước 15 phút.",
-      ),
-    note: z.string().trim().max(1000).default(""),
-    billable: z.boolean().default(false),
-  })
-  .strict();
+/** Trimmed shape of `GET /projects`, used only to label a `projectId`. */
+export interface ProjectOption {
+  id: string;
+  code: string;
+  name: string;
+}
 
-export const entryPatchSchema = z
-  .object({
-    workDate: z.iso.date().optional(),
-    minutes: z
-      .number()
-      .int()
-      .min(MINUTE_STEP)
-      .max(DAY_LIMIT_MINUTES)
-      .optional(),
-    note: z.string().trim().max(1000).optional(),
-    billable: z.boolean().optional(),
-    version: z.number().int().positive(),
-  })
-  .strict();
+export type Decision = "APPROVE" | "REJECT";
 
-export const decisionInputSchema = z
-  .object({
-    decision: z.enum(["APPROVE", "REJECT"]),
-    note: z.string().trim().max(1000).default(""),
-  })
-  .strict()
-  .refine((value) => value.decision !== "REJECT" || Boolean(value.note), {
-    message: "Từ chối tuần công phải ghi lý do.",
-    path: ["note"],
-  });
+export interface TimesheetRules {
+  statuses: string[];
+  minuteStep: number;
+  dayLimitMinutes: number;
+  dayThresholdMinutes: number;
+  weekThresholdMinutes: number;
+}
 
-export const adjustmentInputSchema = z
-  .object({
-    deltaMinutes: z
-      .number()
-      .int()
-      .min(-DAY_LIMIT_MINUTES)
-      .max(DAY_LIMIT_MINUTES)
-      .refine((value) => value !== 0, "Mức điều chỉnh phải khác 0."),
-    note: z.string().trim().min(1, "Cần ghi lý do điều chỉnh.").max(1000),
-  })
-  .strict();
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
-export type EntryInput = z.input<typeof entryInputSchema>;
-export type EntryPatch = Omit<z.input<typeof entryPatchSchema>, "version">;
-export type DecisionInput = z.input<typeof decisionInputSchema>;
-export type AdjustmentInput = z.input<typeof adjustmentInputSchema>;
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}

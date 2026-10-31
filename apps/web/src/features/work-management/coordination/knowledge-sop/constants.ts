@@ -1,60 +1,24 @@
-type Field = {
-  key: string;
-  label: string;
-  type: string;
-  options?: readonly string[];
+import type { NoteStatus } from "./types";
+
+/**
+ * Key of this branch in the permission catalog. The `notes` controller declares
+ * no `@RequirePermission`, so the screen must not hide write actions behind this
+ * key — it is only used to label the branch.
+ */
+export const FEATURE_KEY = "work-management/coordination/knowledge-sop";
+
+export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 25;
+
+/** DTO caps: `fields.content` 20.000, `fields.tags`/`fields.category` 1.000. */
+export const CONTENT_LIMIT = 20_000;
+export const TAGS_LIMIT = 1_000;
+export const CATEGORY_LIMIT = 1_000;
+
+export const STATUS_TONE: Record<NoteStatus, string> = {
+  "Bản nháp": "badge badge-warning",
+  "Đã xuất bản": "badge badge-success",
+  "Lưu trữ": "badge",
 };
-export const definition = {
-  id: "work-management/knowledge-sop",
-  icon: 8,
-  label: "Ghi chú",
-  title: "Ghi chú & tri thức",
-  singular: "ghi chú",
-  dateLabel: "Ngày ghi chú",
-  personLabel: "Tác giả",
-  tabs: [],
-  sections: [],
-  statuses: ["Bản nháp", "Đã xuất bản", "Lưu trữ"],
-  fields: [
-    {
-      key: "category",
-      label: "Thư mục",
-      type: "text",
-    },
-    {
-      key: "content",
-      label: "Nội dung",
-      type: "textarea",
-    },
-    {
-      key: "tags",
-      label: "Nhãn",
-      type: "text",
-    },
-  ],
-  navigation: {
-    title: "Ghi chú",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      {
-        label: "Tất cả",
-        href: "/work-management/knowledge-sop",
-      },
-      {
-        label: "Bản nháp",
-        href: "/work-management/knowledge-sop?status=Bản nháp&section=Bản nháp",
-      },
-      {
-        label: "Đã xuất bản",
-        href: "/work-management/knowledge-sop?status=Đã xuất bản&section=Đã xuất bản",
-      },
-      {
-        label: "Lưu trữ",
-        href: "/work-management/knowledge-sop?status=Lưu trữ&section=Lưu trữ",
-      },
-    ],
-  },
-} as const;
-export const fields: readonly Field[] = definition.fields;
+
+export const EXCERPT_LENGTH = 180;

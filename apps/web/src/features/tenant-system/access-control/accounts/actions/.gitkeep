@@ -1,0 +1,3 @@
+/* Every account write goes through the same public client as the screen; there
+   is no server action for this leaf. The folder exists because all frontend
+   leaves share the same shape. */

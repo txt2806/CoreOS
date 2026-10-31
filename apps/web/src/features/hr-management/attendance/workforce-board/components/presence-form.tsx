@@ -1,203 +1,209 @@
 "use client";
-import { useState } from "react";
-import {
-  presenceInput,
-  type PresenceDto,
-  type Status,
-} from "@/features/hr-management/attendance/workforce-board/types";
-import { statusLabels } from "@/features/hr-management/attendance/workforce-board/constants";
-import { client } from "@/features/hr-management/attendance/workforce-board/api/client";
-import { workforceChanged } from "@/features/hr-management/attendance/workforce-board/hooks/use-workforce";
-import {
-  Button,
-  Field,
-  Input,
-  Select,
-  Textarea,
-} from "@/features/hr-management/attendance/workforce-board/components/primitives/ui";
 
-type FieldErrors = Record<string, string>;
+import { useId, useState, type FormEvent } from "react";
+import { ApiError } from "../api/client";
+import { BOARD_ORDER, STATUS_HINT, STATUS_LABEL } from "../constants";
+import { formatDate } from "../format";
+import { PRESENCE_STATUSES, type PresenceInput, type PresenceStatus } from "../types";
+import { Field, Modal, Select, TextInput } from "./primitives";
 
-function errorsOf(issues: { path: PropertyKey[]; message: string }[]) {
-  const result: FieldErrors = {};
-  for (const issue of issues)
-    result[String(issue.path[0] ?? "form")] ??= issue.message;
-  return result;
+interface PresenceFormProps {
+  workDate: string;
+  me: { id: string; name: string } | null;
+  onDeclare: (input: PresenceInput) => Promise<unknown>;
+  onClose: () => void;
 }
 
-export function PresenceForm({
-  record,
-  workDate,
-  notify,
-  onClose,
-}: {
-  record?: PresenceDto;
-  workDate: string;
-  notify: (message: string) => void;
-  onClose: () => void;
-}) {
-  const [values, setValues] = useState({
-    employeeId: record?.employeeId ?? "",
-    employeeName: record?.employeeName ?? "",
-    workDate: record?.workDate ?? workDate,
-    status: (record?.status ?? "IN_OFFICE") as Status,
-    shiftLabel: record?.shiftLabel ?? "",
-    note: record?.note ?? "",
-  });
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [failure, setFailure] = useState("");
-  const [pending, setPending] = useState(false);
+/**
+ * Declaring presence is a create, so the employee and date are part of the
+ * payload. The date stays fixed to the day the board is showing; switching days
+ * happens on the board, not inside the dialog.
+ */
+export function PresenceDialog({ workDate, me, onDeclare, onClose }: PresenceFormProps) {
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const id = (key: string) => `presence-${uid}-${key}`;
+  const [employeeId, setEmployeeId] = useState(me?.id ?? "");
+  const [employeeName, setEmployeeName] = useState(me?.name ?? "");
+  const [status, setStatus] = useState<PresenceStatus>("IN_OFFICE");
+  const [shiftLabel, setShiftLabel] = useState("");
+  const [note, setNote] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function submit(event: React.FormEvent) {
+  const validate = (): Record<string, string> => {
+    const found: Record<string, string> = {};
+    if (!employeeId.trim()) found.employeeId = "Nhập mã nhân sự trong hồ sơ.";
+    else if (employeeId.length > 64) found.employeeId = "Mã nhân sự tối đa 64 ký tự.";
+    if (!employeeName.trim()) found.employeeName = "Nhập tên nhân sự để đồng nghiệp nhận ra.";
+    else if (employeeName.length > 200) found.employeeName = "Tên tối đa 200 ký tự.";
+    if (shiftLabel.length > 120) found.shiftLabel = "Tên ca tối đa 120 ký tự.";
+    if (note.length > 500) found.note = "Ghi chú tối đa 500 ký tự.";
+    return found;
+  };
+
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (pending) return;
-    setFailure("");
-    if (record) {
-      setPending(true);
-      try {
-        await client.update(record, {
-          status: values.status,
-          shiftLabel: values.shiftLabel,
-          note: values.note,
-        });
-        workforceChanged();
-        notify("Đã cập nhật trạng thái hiện diện.");
-        onClose();
-      } catch (cause) {
-        setFailure(
-          cause instanceof Error ? cause.message : "Không thể lưu trạng thái",
-        );
-      } finally {
-        setPending(false);
-      }
+    const found = validate();
+    setErrors(found);
+    setFormError(null);
+    const first = ["employeeId", "employeeName", "shiftLabel", "note"].find(
+      (key) => found[key],
+    );
+    if (first) {
+      document.getElementById(id(first))?.focus();
       return;
     }
-    const parsed = presenceInput.safeParse(values);
-    if (!parsed.success) {
-      setErrors(errorsOf(parsed.error.issues));
-      return;
-    }
-    setErrors({});
-    setPending(true);
+    setBusy(true);
     try {
-      await client.create(parsed.data);
-      workforceChanged();
-      notify("Đã khai báo trạng thái hiện diện.");
+      await onDeclare({
+        employeeId: employeeId.trim(),
+        employeeName: employeeName.trim(),
+        workDate,
+        status,
+        shiftLabel: shiftLabel.trim(),
+        note: note.trim(),
+      });
       onClose();
-    } catch (cause) {
-      setFailure(
-        cause instanceof Error ? cause.message : "Không thể lưu trạng thái",
-      );
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        const mapped: Record<string, string> = {};
+        for (const issue of caught.issues) {
+          const key = issue.path.split(/[.[\]]/).filter(Boolean).pop();
+          if (key && ["employeeId", "employeeName", "shiftLabel", "note"].includes(key))
+            mapped[key] = issue.message;
+        }
+        setErrors(mapped);
+        setFormError(
+          Object.keys(mapped).length
+            ? "Một số trường chưa hợp lệ. Sửa theo gợi ý bên dưới rồi gửi lại."
+            : caught.message,
+        );
+      } else {
+        setFormError(
+          caught instanceof Error ? caught.message : "Chưa khai báo được trạng thái.",
+        );
+      }
     } finally {
-      setPending(false);
+      setBusy(false);
     }
-  }
+  };
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
-      {failure && (
-        <p className="error" role="alert">
-          {failure}
-        </p>
-      )}
-      {!record && (
+    <Modal
+      title="Khai báo trạng thái hiện diện"
+      onClose={onClose}
+      wide
+      footer={
         <>
-          <Field label="Mã nhân sự" error={errors.employeeId}>
-            <Input
-              value={values.employeeId}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  employeeId: event.target.value,
-                }))
-              }
-              maxLength={64}
-              required
-              aria-invalid={Boolean(errors.employeeId)}
-            />
-          </Field>
-          <Field label="Tên nhân sự" error={errors.employeeName}>
-            <Input
-              value={values.employeeName}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  employeeName: event.target.value,
-                }))
-              }
-              maxLength={200}
-              required
-              aria-invalid={Boolean(errors.employeeName)}
-            />
-          </Field>
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
+            Huỷ
+          </button>
+          <button
+            type="submit"
+            form={id("form")}
+            className="btn btn-primary"
+            disabled={busy}
+            aria-busy={busy ? "true" : undefined}
+          >
+            {busy ? "Đang lưu…" : "Khai báo"}
+          </button>
         </>
-      )}
-      <Field label="Ngày" error={errors.workDate}>
-        <Input
-          type="date"
-          value={values.workDate}
-          onChange={(event) =>
-            setValues((current) => ({
-              ...current,
-              workDate: event.target.value,
-            }))
-          }
-          disabled={Boolean(record)}
-          required
-          aria-invalid={Boolean(errors.workDate)}
-        />
-      </Field>
-      <Field label="Trạng thái">
-        <Select
-          value={values.status}
-          onChange={(event) =>
-            setValues((current) => ({
-              ...current,
-              status: event.target.value as Status,
-            }))
-          }
+      }
+    >
+      <form id={id("form")} className="stack gap-4" onSubmit={submit} noValidate>
+        {formError ? (
+          <div className="alert alert-danger" role="alert">
+            <span>{formError}</span>
+          </div>
+        ) : null}
+
+        <p className="muted">
+          Ngày áp dụng: <strong className="tabular">{formatDate(workDate)}</strong>. Mỗi
+          nhân sự chỉ có một bản ghi cho một ngày; khai báo lại sẽ bị máy chủ từ chối.
+        </p>
+
+        <div className="field-grid">
+          <Field label="Mã nhân sự" htmlFor={id("employeeId")} required error={errors.employeeId}>
+            <TextInput
+              id={id("employeeId")}
+              value={employeeId}
+              maxLength={64}
+              autoComplete="off"
+              invalid={Boolean(errors.employeeId)}
+              placeholder="EMP-0142"
+              onChange={(event) => setEmployeeId(event.target.value)}
+            />
+          </Field>
+
+          <Field label="Tên nhân sự" htmlFor={id("employeeName")} required error={errors.employeeName}>
+            <TextInput
+              id={id("employeeName")}
+              value={employeeName}
+              maxLength={200}
+              autoComplete="off"
+              invalid={Boolean(errors.employeeName)}
+              placeholder="Tên như trong hồ sơ nhân sự"
+              onChange={(event) => setEmployeeName(event.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="Trạng thái"
+            htmlFor={id("status")}
+            required
+            hint={STATUS_HINT[status]}
+          >
+            <Select
+              id={id("status")}
+              value={status}
+              onChange={(event) => {
+                const next = event.target.value as PresenceStatus;
+                if (PRESENCE_STATUSES.includes(next)) setStatus(next);
+              }}
+            >
+              {BOARD_ORDER.map((value) => (
+                <option key={value} value={value}>
+                  {STATUS_LABEL[value]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field
+            label="Ca làm"
+            htmlFor={id("shiftLabel")}
+            error={errors.shiftLabel}
+            hint="Ví dụ: Ca sáng 08:00–17:00."
+          >
+            <TextInput
+              id={id("shiftLabel")}
+              value={shiftLabel}
+              maxLength={120}
+              autoComplete="off"
+              invalid={Boolean(errors.shiftLabel)}
+              onChange={(event) => setShiftLabel(event.target.value)}
+            />
+          </Field>
+        </div>
+
+        <Field
+          label="Ghi chú"
+          htmlFor={id("note")}
+          error={errors.note}
+          counter={`${note.length}/500`}
+          hint="Ghi nơi làm việc hoặc lý do, không ghi thông tin sức khỏe chi tiết."
         >
-          {Object.entries(statusLabels).map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <Field
-        label="Ca / khung giờ"
-        error={errors.shiftLabel}
-        hint="Ví dụ: 08:00–17:00 hoặc Công tác Hà Nội."
-      >
-        <Input
-          value={values.shiftLabel}
-          onChange={(event) =>
-            setValues((current) => ({
-              ...current,
-              shiftLabel: event.target.value,
-            }))
-          }
-          maxLength={120}
-        />
-      </Field>
-      <Field label="Ghi chú" error={errors.note}>
-        <Textarea
-          value={values.note}
-          onChange={(event) =>
-            setValues((current) => ({ ...current, note: event.target.value }))
-          }
-          rows={2}
-          maxLength={500}
-        />
-      </Field>
-      <footer className="flex justify-end gap-2">
-        <Button type="button" variant="secondary" onClick={onClose}>
-          Hủy
-        </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Đang lưu…" : record ? "Lưu thay đổi" : "Khai báo"}
-        </Button>
-      </footer>
-    </form>
+          <textarea
+            id={id("note")}
+            className="textarea"
+            rows={3}
+            maxLength={500}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+        </Field>
+      </form>
+    </Modal>
   );
 }

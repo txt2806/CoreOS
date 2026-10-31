@@ -1,56 +1,99 @@
-import { z } from "zod";
-import { apiRequest } from "./http";
+import type { NotificationItem, NotificationPage, SessionView } from "../types";
 
-const recordSchema = z.object({
-  id: z.uuid(),
-  recipient: z.string(),
-  source: z.enum(["task", "comment", "message", "meeting", "request"]),
-  title: z.string(),
-  body: z.string(),
-  link: z.string(),
-  sourceId: z.uuid().nullable(),
-  readAt: z.iso.datetime().nullable(),
-  deletedAt: z.iso.datetime().nullable().default(null),
-  createdAt: z.iso.datetime(),
-});
+/**
+ * Every call goes through the same-origin proxy, so the HttpOnly session cookie
+ * travels with the request and no CORS preflight is involved.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
 
-const listSchema = z.object({
-  items: z.array(recordSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-  unread: z.number(),
-});
+  constructor(status: number, message: string, issues: { path: string; message: string }[] = []) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
+  }
+}
 
-export const client = {
-  async list(recipient: string, unread?: boolean, signal?: AbortSignal) {
-    const params = new URLSearchParams({ recipient });
-    if (unread !== undefined) params.set("unread", unread ? "true" : "false");
-    return apiRequest(
-      "/notifications?" + params.toString(),
-      { signal },
-      listSchema,
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+    });
+  } catch {
+    throw new ApiError(0, "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.");
+  }
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
     );
-  },
-  markRead(id: string) {
-    return apiRequest(
-      "/notifications/" + id + "/read",
-      { method: "PATCH" },
-      recordSchema,
-    );
-  },
-  markAllRead(recipient: string) {
-    return apiRequest(
-      "/notifications/read-all",
-      { method: "PATCH", body: JSON.stringify({ recipient }) },
-      z.object({ updated: z.number() }),
-    );
-  },
-  remove(id: string) {
-    return apiRequest(
-      "/notifications/" + id,
-      { method: "DELETE" },
-      recordSchema,
-    );
-  },
-};
+  }
+
+  return body as T;
+}
+
+export interface NotificationListQuery {
+  recipient: string;
+  page: number;
+  pageSize: number;
+  unread?: boolean;
+}
+
+export function listNotifications(query: NotificationListQuery) {
+  const search = new URLSearchParams({
+    recipient: query.recipient,
+    page: String(query.page),
+    pageSize: String(query.pageSize),
+  });
+  if (query.unread) search.set("unread", "true");
+  return request<NotificationPage>(`/notifications?${search.toString()}`);
+}
+
+export function markRead(id: string) {
+  return request<NotificationItem>(`/notifications/${id}/read`, { method: "PATCH" });
+}
+
+export function markAllRead(recipient: string) {
+  return request<{ updated: number }>("/notifications/read-all", {
+    method: "PATCH",
+    body: JSON.stringify({ recipient }),
+  });
+}
+
+/** The server keeps the row and stamps `deletedAt`; the list simply stops returning it. */
+export function removeNotification(id: string) {
+  return request<NotificationItem>(`/notifications/${id}`, { method: "DELETE" });
+}
+
+export function session() {
+  return request<SessionView>("/auth/session");
+}
+
+/** Same-origin SSE endpoint; the proxy forwards the stream chunk by chunk. */
+export function streamUrl(recipient: string) {
+  return `/api/v1/notifications/stream?recipient=${encodeURIComponent(recipient)}`;
+}

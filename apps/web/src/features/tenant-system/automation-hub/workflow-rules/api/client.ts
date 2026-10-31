@@ -1,78 +1,105 @@
-import {
-  rulePageSchema,
-  ruleSchema,
-  runPageSchema,
-  simulationSchema,
-  type Rule,
-  type RuleDraft,
-  type RulePage,
-  type Run,
-  type Simulation,
-} from "@/features/tenant-system/automation-hub/workflow-rules/types";
-import { apiRequest } from "@/features/tenant-system/automation-hub/workflow-rules/api/http";
+import type {
+  Rule,
+  RuleInput,
+  RuleList,
+  RulePatch,
+  Run,
+  RunQuery,
+  ToggleInput,
+} from "../types";
 
-const base = "/automation";
+/** Same-origin proxy in front of NestJS; the HttpOnly cookie carries the session. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
 
-export const client = {
-  rules: (signal?: AbortSignal) =>
-    apiRequest(`${base}/rules`, { signal }, rulePageSchema),
+  constructor(status: number, message: string, issues: { path: string; message: string }[] = []) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
+  }
+}
 
-  runs: (
-    query: { ruleId?: string; limit?: number } = {},
-    signal?: AbortSignal,
-  ) => {
-    const params = new URLSearchParams();
-    if (query.ruleId) params.set("ruleId", query.ruleId);
-    params.set("limit", String(query.limit ?? 30));
-    return apiRequest(
-      `${base}/runs?${params.toString()}`,
-      { signal },
-      runPageSchema,
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
+      },
+    });
+  } catch {
+    throw new ApiError(0, "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.");
+  }
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
     );
-  },
+  }
 
-  create: (draft: RuleDraft) =>
-    apiRequest(
-      `${base}/rules`,
-      { method: "POST", body: JSON.stringify(draft) },
-      ruleSchema,
-    ),
+  return body as T;
+}
 
-  update: (rule: Rule, draft: RuleDraft) =>
-    apiRequest(
-      `${base}/rules/${rule.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ ...draft, version: rule.version }),
-      },
-      ruleSchema,
-    ),
+export function listRules() {
+  return request<RuleList>("/automation/rules");
+}
 
-  toggle: (rule: Rule, enabled: boolean) =>
-    apiRequest(
-      `${base}/rules/${rule.id}/toggle`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ enabled, version: rule.version }),
-      },
-      ruleSchema,
-    ),
+export function createRule(input: RuleInput) {
+  return request<Rule>("/automation/rules", { method: "POST", body: JSON.stringify(input) });
+}
 
-  remove: (rule: Rule) =>
-    apiRequest(`${base}/rules/${rule.id}?version=${rule.version}`, {
-      method: "DELETE",
-    }),
+export function updateRule(id: string, patch: RulePatch) {
+  return request<Rule>(`/automation/rules/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
 
-  simulate: (input: {
-    trigger: RuleDraft["trigger"];
-    values: Record<string, string>;
-    changed: string[];
-  }) =>
-    apiRequest(
-      `${base}/simulate`,
-      { method: "POST", body: JSON.stringify(input) },
-      simulationSchema,
-    ),
-};
+/** Toggle has its own route and answers 200 with the refreshed rule. */
+export function toggleRule(id: string, input: ToggleInput) {
+  return request<Rule>(`/automation/rules/${id}/toggle`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
 
-export type { Rule, RulePage, Run, Simulation };
+/** DELETE keeps its body empty, so the version travels in the query string. */
+export function deleteRule(id: string, version: number) {
+  return request<{ id: string }>(
+    `/automation/rules/${id}?version=${encodeURIComponent(String(version))}`,
+    { method: "DELETE" },
+  );
+}
+
+export function listRuns(query: RunQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.ruleId) params.set("ruleId", query.ruleId);
+  if (query.outcome) params.set("outcome", query.outcome);
+  if (query.limit) params.set("limit", String(query.limit));
+  const suffix = params.toString();
+  return request<{ items: Run[] }>(`/automation/runs${suffix ? `?${suffix}` : ""}`);
+}

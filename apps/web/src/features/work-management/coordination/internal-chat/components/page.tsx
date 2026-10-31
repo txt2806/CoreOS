@@ -1,425 +1,384 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type { RecordDto } from "@/features/work-management/coordination/internal-chat/types";
-import { definition } from "@/features/work-management/coordination/internal-chat/constants";
-import { client } from "@/features/work-management/coordination/internal-chat/api/client";
-import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/coordination/internal-chat/hooks/use-records";
-import {
-  Modal,
-  useWorkspace,
-} from "@/features/work-management/coordination/internal-chat/components/primitives/workspace";
-import { Button } from "@/features/work-management/coordination/internal-chat/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/work-management/coordination/internal-chat/components/primitives/forms";
-import { Badge } from "@/features/work-management/coordination/internal-chat/components/primitives/foundations";
-import { RecordForm } from "@/features/work-management/coordination/internal-chat/components/record-form";
-import styles from "@/features/work-management/coordination/internal-chat/components/styles.module.css";
 
-export function ModulePage() {
-  const params = useSearchParams();
-  const { openCreate, notify } = useWorkspace();
-  const { records, loading, error, reload } = useModuleRecords();
-  const [query, setQuery] = useState(params.get("q") || "");
-  const [status, setStatus] = useState("");
-  const [detail, setDetail] = useState<RecordDto | null>(null),
-    [editing, setEditing] = useState<RecordDto | null>(null),
-    [deleting, setDeleting] = useState<RecordDto | null>(null),
-    [pending, setPending] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [view, setView] = useState("cards");
-  const effectiveStatus =
-    status === "all" ? "" : status || params.get("status") || "";
-  const filtered = records.filter(
-    (record) =>
-      (!effectiveStatus || record.status === effectiveStatus) &&
-      `${record.code} ${record.name} ${record.assignee} ${record.note} ${Object.values(record.fields).join(" ")}`
-        .toLocaleLowerCase("vi")
-        .includes(query.trim().toLocaleLowerCase("vi")),
+import { useMemo, useState } from "react";
+import { CONVERSATION_STATUSES } from "../types";
+import type { Conversation, ConversationStatus } from "../types";
+import { formatDate, sortedComments, timeOf } from "../format";
+import { useChat, type Feedback } from "../hooks/use-chat";
+import { CreateConversationDialog } from "./create-dialog";
+import { ConversationThread } from "./thread";
+import {
+  CloseGlyph,
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+  SkeletonLines,
+  StatusBadge,
+} from "./primitives";
+
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+export function InternalChatPage() {
+  const chat = useChat();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const filtersActive = Boolean(chat.query.q || chat.query.status);
+
+  /* Falls back to the first row so the reading pane is never empty for no reason. */
+  const active: Conversation | null =
+    chat.rows.find((row) => row.id === selectedId) ?? chat.rows[0] ?? null;
+
+  const loadedMessages = useMemo(
+    () => chat.rows.reduce((sum, row) => sum + (row.fields.comments?.length ?? 0), 0),
+    [chat.rows],
   );
-  async function update(
-    record: RecordDto,
-    patch: Parameters<typeof client.update>[1],
-  ) {
-    if (pending) return false;
-    setPending(true);
-    setActionError("");
-    if (patch.fields)
-      setDetail((current) =>
-        current?.id === record.id
-          ? { ...current, fields: patch.fields! }
-          : current,
-      );
-    try {
-      const next = await client.update(record, patch);
-      setDetail((current) => (current?.id === next.id ? next : current));
-      recordsChanged();
-      notify("Đã cập nhật thành công.");
-      return true;
-    } catch (e) {
-      setDetail((current) => (current?.id === record.id ? record : current));
-      setActionError(e instanceof Error ? e.message : "Không thể cập nhật");
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }
-  function exportCsv() {
-    const cell = (value: string) =>
-      '"' +
-      (/^[=+@-]/.test(value) ? "'" : "") +
-      value.replaceAll('"', '""') +
-      '"';
-    const csv = [
-      [
-        "Mã",
-        "Tiêu đề",
-        "Trạng thái",
-        definition.dateLabel,
-        definition.personLabel,
-      ],
-      ...filtered.map((r) => [r.code, r.name, r.status, r.date, r.assignee]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "messages.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+
+  const forbidden = chat.error?.status === 403;
+  const canCreate = chat.can("create");
+  const canWrite = chat.can("update");
+  const open = chat.totals["Đang mở"];
+  const closed = chat.totals["Đã đóng"];
 
   return (
-    <div className={styles.root}>
-      <div className="module-view">
-        <section className="records-panel">
-          <div className={styles.header}>
-            <div>
-              <h1>{definition.title}</h1>
-              <p>Trao đổi theo chủ đề, giữ thông tin trong đúng ngữ cảnh.</p>
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Điều phối công việc</p>
+          <h1>Trao đổi nội bộ</h1>
+          <p className="page-lede">
+            Mạch trao đổi của từng ca vận hành: chọn một cuộc ở cột trái, đọc và gửi tin
+            nhắn ở cột phải. Nội dung tin nhắn được lưu cùng cuộc trao đổi nên ai mở sau
+            vẫn đọc được đầy đủ ngữ cảnh.
+          </p>
+        </div>
+        <div className="page-actions">
+          {canCreate ? (
+            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+              <PlusGlyph />
+              Mở cuộc trao đổi
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={chat.reload}
+            aria-busy={chat.loading ? "true" : undefined}
+          >
+            Tải lại
+          </button>
+        </div>
+      </header>
+
+      <section className="metric-strip" aria-label="Tình hình trao đổi nội bộ">
+        <div className="metric">
+          <span className="metric-value tabular">
+            {chat.data.total.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Cuộc trao đổi</span>
+          <span className="metric-note">tổng theo bộ lọc hiện tại</span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {open === undefined ? "—" : open.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Đang mở</span>
+          <span className="metric-note">
+            {open === undefined ? "máy chủ chưa trả lời" : "còn nhận tin nhắn mới"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {closed === undefined ? "—" : closed.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Đã đóng</span>
+          <span className="metric-note">
+            {closed === undefined ? "máy chủ chưa trả lời" : "chỉ đọc, mở lại khi cần"}
+          </span>
+        </div>
+        <div className="metric">
+          <span className="metric-value tabular">
+            {loadedMessages.toLocaleString("vi-VN")}
+          </span>
+          <span className="metric-label">Tin nhắn trên trang này</span>
+          <span className="metric-note">đếm từ dữ liệu đã tải</span>
+        </div>
+      </section>
+
+      {chat.feedback ? (
+        <div className={ALERT_TONE[chat.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{chat.feedback.message}</span>
+            {chat.feedback.hint ? (
+              <span className="muted">{chat.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => chat.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="chat-search"
+                  className="input"
+                  type="search"
+                  value={chat.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo mã, tên, kênh…"
+                  aria-label="Tìm cuộc trao đổi"
+                  onChange={(event) => chat.patchQuery({ q: event.target.value, page: 1 })}
+                />
+                {chat.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => chat.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={chat.query.status ?? ""}
+                aria-label="Lọc theo trạng thái cuộc trao đổi"
+                onChange={(event) =>
+                  chat.patchQuery({
+                    status: event.target.value as ConversationStatus | "",
+                    page: 1,
+                  })
+                }
+                style={{ width: 168 }}
+              >
+                <option value="">Mọi trạng thái</option>
+                {CONVERSATION_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </div>
-            <div className={styles.actions}>
-              <Button variant="secondary" onClick={exportCsv}>
-                Xuất CSV
-              </Button>
-              <Button onClick={openCreate}>Tạo mới</Button>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {chat.data.total.toLocaleString("vi-VN")} cuộc trao đổi ·{" "}
+                {chat.rows.length} hiển thị
+              </span>
             </div>
           </div>
 
-          <div className={styles.toolbar}>
-            <Input
-              aria-label="Tìm kiếm"
-              placeholder={"Tìm " + definition.singular + "…"}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <Select
-              aria-label="Lọc trạng thái"
-              value={effectiveStatus}
-              onChange={(e) => setStatus(e.target.value || "all")}
-            >
-              <option value="">Tất cả trạng thái</option>
-              {definition.statuses.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </Select>
-            <Button
-              variant={view === "list" ? "primary" : "secondary"}
-              onClick={() => setView("list")}
-            >
-              Danh sách
-            </Button>
-            <Button
-              variant={view === "cards" ? "primary" : "secondary"}
-              onClick={() => setView("cards")}
-            >
-              Thẻ
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              {filtered.length} mục
-            </span>
-          </div>
-          {(error || actionError) && (
-            <div role="alert" className="error">
-              {error || actionError}
-              <Button variant="ghost" onClick={reload}>
-                Thử lại
-              </Button>
+          {filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {chat.query.q ? (
+                <span className="chip" data-active="true">
+                  Tìm: “{chat.query.q}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => chat.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {chat.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {chat.query.status}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => chat.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={chat.clearFilters}>
+                Xoá bộ lọc
+              </button>
             </div>
-          )}
-          {loading ? (
-            <p role="status">Đang tải dữ liệu…</p>
-          ) : !filtered.length ? (
-            <div className={styles.empty}>
-              <h2>Chưa có {definition.singular} phù hợp</h2>
-              <p>Tạo nội dung đầu tiên hoặc thay đổi điều kiện tìm kiếm.</p>
-              <Button onClick={openCreate}>Tạo mới</Button>
-            </div>
-          ) : (
-            <>
-              {view === "list" ? (
-                <div className={styles.scroll}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Mã</th>
-                        <th>Tiêu đề</th>
-                        <th>Trạng thái</th>
-                        <th>{definition.dateLabel}</th>
-                        <th>{definition.personLabel}</th>
-                        <th>Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((record) => (
-                        <tr key={record.id}>
-                          <td>{record.code}</td>
-                          <td>
-                            <button
-                              className="font-medium"
-                              onClick={() => setDetail(record)}
-                            >
-                              {record.name}
-                            </button>
-                          </td>
-                          <td>
-                            <Select
-                              aria-label={"Trạng thái " + record.code}
-                              disabled={pending}
-                              value={record.status}
-                              onChange={(e) =>
-                                void update(record, {
-                                  status: e.target.value as RecordDto["status"],
-                                })
-                              }
-                            >
-                              {definition.statuses.map((s) => (
-                                <option key={s}>{s}</option>
-                              ))}
-                            </Select>
-                          </td>
-                          <td>{record.date}</td>
-                          <td>{record.assignee || "Chưa phân công"}</td>
-                          <td>
-                            <div className={styles.actions}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditing(record)}
-                              >
-                                Sửa
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleting(record)}
-                              >
-                                Xóa
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className={styles.grid}>
-                  {filtered.map((record) => (
-                    <article className={styles.card} key={record.id}>
-                      <div className={styles.meta}>
-                        <span>{record.code}</span>
-                        <Badge>{record.status}</Badge>
-                      </div>
-                      <h3>
-                        <button
-                          type="button"
-                          className={styles.titleLink}
-                          onClick={() => setDetail(record)}
-                        >
-                          {record.name}
-                        </button>
-                      </h3>
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {record.note}
-                      </p>
-                      <div className={styles.meta}>
-                        <span>{record.assignee || "Chưa phân công"}</span>
-                        <span>{record.date}</span>
-                      </div>
-                      <div className={styles.actions}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditing(record)}
-                        >
-                          Sửa
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDeleting(record)}
-                        >
-                          Xóa
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-      {detail && (
-        <Modal title={detail.name} onClose={() => setDetail(null)}>
-          <div className={styles.details}>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
-            )}
-            <Badge>{detail.status}</Badge>
-            <p>
-              <strong>{detail.code}</strong> · {detail.date} ·{" "}
-              {detail.assignee || "Chưa phân công"}
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem trao đổi nội bộ</span>
+            <p className="empty-body">
+              Phân hệ Trao đổi nội bộ chỉ mở cho người có quyền “Xem”. Yêu cầu quản trị hệ
+              thống cấp quyền rồi tải lại trang.
             </p>
-            <p>{detail.note || "Chưa có mô tả."}</p>
-            {Object.entries(detail.fields)
-              .filter(([, value]) => !Array.isArray(value))
-              .map(([key, value]) => (
-                <p key={key}>
-                  <strong>
-                    {definition.fields.find((field) => field.key === key)
-                      ?.label || key}
-                    :{" "}
-                  </strong>
-                  {String(value)}
-                </p>
-              ))}
-            <h3>Trao đổi</h3>
-            {(detail.fields.comments || []).map((comment) => (
-              <div className={styles.comment} key={comment.id}>
-                <small>
-                  {comment.author} ·{" "}
-                  {new Date(comment.createdAt).toLocaleString("vi-VN")}
-                </small>
-                <p>{comment.text}</p>
-              </div>
-            ))}
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const form = event.currentTarget;
-                const data = new FormData(form);
-                const text = String(data.get("comment") || "").trim();
-                if (!text) return;
-                void update(detail, {
-                  fields: {
-                    ...detail.fields,
-                    comments: [
-                      ...(detail.fields.comments || []),
-                      {
-                        id: crypto.randomUUID(),
-                        text,
-                        author: String(data.get("author") || "Tôi"),
-                        createdAt: new Date().toISOString(),
-                      },
-                    ],
-                  },
-                }).then((saved) => {
-                  if (saved) form.reset();
-                });
-              }}
-            >
-              <label>
-                Tên hiển thị
-                <Input
-                  name="author"
-                  defaultValue="Tôi"
-                  required
-                  maxLength={150}
-                />
-              </label>
-              <label>
-                Nội dung trao đổi
-                <Input name="comment" required maxLength={2000} />
-              </label>
-              <Button type="submit" disabled={pending}>
-                Gửi trao đổi
-              </Button>
-            </form>
+            <button type="button" className="btn btn-ghost" onClick={chat.reload}>
+              Tải lại
+            </button>
           </div>
-          <footer>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setEditing(detail);
-                setDetail(null);
-              }}
-            >
-              Chỉnh sửa
-            </Button>
-            <Button onClick={() => setDetail(null)}>Đóng</Button>
-          </footer>
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={"Chỉnh sửa " + definition.singular}
-          onClose={() => setEditing(null)}
-        >
-          <RecordForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {deleting && (
-        <Modal title="Xác nhận xóa" onClose={() => setDeleting(null)}>
-          <div className="form-body">
-            <p>Bạn muốn xóa “{deleting.name}”?</p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
+        ) : chat.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách trao đổi</span>
+            <p className="empty-body">{chat.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={chat.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : chat.loading && chat.rows.length === 0 ? (
+          <div className="surface-body">
+            <SkeletonLines rows={6} />
+          </div>
+        ) : chat.rows.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {filtersActive
+                ? "Không có cuộc trao đổi nào khớp bộ lọc"
+                : chat.data.total > 0
+                  ? "Trang này không còn cuộc trao đổi nào"
+                  : "Chưa có cuộc trao đổi nào"}
+            </span>
+            <p className="empty-body">
+              {filtersActive
+                ? "Thử từ khoá khác hoặc bỏ lọc trạng thái để xem lại toàn bộ danh sách."
+                : chat.data.total > 0
+                  ? "Dữ liệu đã đổi sau lần tải trước. Về trang đầu để xem các cuộc đang mở."
+                  : "Mở cuộc trao đổi đầu tiên để cả ca cùng đọc chung một mạch ghi chú."}
+            </p>
+            {filtersActive ? (
+              <button type="button" className="btn btn-ghost" onClick={chat.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            ) : chat.data.total > 0 ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => chat.patchQuery({ page: 1 })}
+              >
+                Về trang đầu
+              </button>
+            ) : canCreate ? (
+              <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+                <PlusGlyph />
+                Mở cuộc trao đổi
+              </button>
+            ) : (
+              <button type="button" className="btn btn-ghost" onClick={chat.reload}>
+                Tải lại
+              </button>
             )}
           </div>
-          <footer>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={pending}
-              onClick={async () => {
-                if (pending) return;
-                setPending(true);
-                setActionError("");
-                try {
-                  await client.remove(deleting);
-                  recordsChanged();
-                  setDeleting(null);
-                  notify("Đã xóa thành công.");
-                } catch (e) {
-                  setActionError(
-                    e instanceof Error ? e.message : "Không thể xóa",
-                  );
-                } finally {
-                  setPending(false);
-                }
-              }}
+        ) : (
+          <div className="grid lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+            <div
+              className="list"
+              aria-label="Danh sách cuộc trao đổi"
+              style={{ borderRight: "1px solid var(--line)", maxHeight: 640, overflowY: "auto" }}
             >
-              Xóa
-            </Button>
-          </footer>
-        </Modal>
-      )}
+              {chat.rows.map((row) => {
+                const comments = sortedComments(row.fields.comments ?? []);
+                const last = comments[comments.length - 1];
+                const isActive = active?.id === row.id;
+                return (
+                  <button
+                    key={row.id}
+                    type="button"
+                    className="list-row"
+                    aria-current={isActive ? "true" : undefined}
+                    onClick={() => setSelectedId(row.id)}
+                    aria-label={`Mở cuộc trao đổi ${row.code} — ${row.name}`}
+                    style={
+                      isActive
+                        ? { background: "var(--surface-inset)", boxShadow: "inset 3px 0 0 var(--accent)" }
+                        : undefined
+                    }
+                  >
+                    <span className="list-main">
+                      <span className="row items-center gap-2 wrap">
+                        <span className="mono muted">{row.code}</span>
+                        <StatusBadge status={row.status} />
+                      </span>
+                      <strong className="truncate">{row.name}</strong>
+                      <span className="list-meta truncate">
+                        {last ? `${last.author}: ${last.text}` : "Chưa có tin nhắn nào"}
+                      </span>
+                    </span>
+                    <span className="stack gap-1 items-end" style={{ flex: "none" }}>
+                      <span className="muted tabular" style={{ fontSize: 12 }}>
+                        {last ? timeOf(last.createdAt) : formatDate(row.date)}
+                      </span>
+                      <span className="muted tabular" style={{ fontSize: 12 }}>
+                        {comments.length.toLocaleString("vi-VN")} tin
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {active ? (
+              <ConversationThread
+                conversation={active}
+                author={chat.author}
+                pending={chat.pending === active.id}
+                canWrite={canWrite}
+                onSend={chat.send}
+                onToggleStatus={(conversation, status) => void chat.changeStatus(conversation, status)}
+              />
+            ) : (
+              <div className="empty-state">
+                <span className="empty-title">Chọn một cuộc trao đổi</span>
+                <p className="empty-body">
+                  Danh sách bên trái đang trống ở trang này. Chọn cuộc khác hoặc về trang đầu.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!forbidden && !chat.error && chat.data.total > 0 ? (
+          <Pagination
+            id="chat"
+            page={chat.data.page}
+            pageSize={chat.data.pageSize}
+            total={chat.data.total}
+            onPage={(page) => chat.patchQuery({ page })}
+            onPageSize={(size) => chat.patchQuery({ pageSize: size, page: 1 })}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Máy chủ chưa mở kênh thời gian thực cho phân hệ này, nên danh sách được đọc lại khi
+        bạn quay về tab và mỗi 30 giây. Tin nhắn bạn gửi hiện ngay và được đối chiếu lại
+        sau khi lưu; nếu lưu lỗi, nội dung vẫn nằm trong ô soạn để gửi lại.
+      </p>
+
+      {!canWrite && !forbidden ? (
+        <p className="muted" role="note">
+          Bạn chỉ đọc được nội dung: quyền “Sửa” chưa được cấp nên ô soạn tin nhắn đang tắt.
+        </p>
+      ) : null}
+
+      {creating ? (
+        <CreateConversationDialog onCreate={chat.create} onClose={() => setCreating(false)} />
+      ) : null}
     </div>
   );
 }

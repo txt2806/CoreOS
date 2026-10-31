@@ -1,56 +1,92 @@
-import { z } from "zod";
+/** Mirrors `apps/api/src/features/hr-management/leaves/leave-requests/dto/leave-requests.dto.ts`. */
+export const LEAVE_STATUSES = ["PENDING", "APPROVED", "REJECTED", "CANCELLED"] as const;
+export type LeaveStatus = (typeof LEAVE_STATUSES)[number];
 
-export const statusSchema = z.enum([
-  "PENDING",
-  "APPROVED",
-  "REJECTED",
-  "CANCELLED",
-]);
-export const leaveTypeSchema = z.enum(["ANNUAL", "SICK", "UNPAID", "OTHER"]);
+export const LEAVE_TYPES = ["ANNUAL", "SICK", "UNPAID", "OTHER"] as const;
+export type LeaveType = (typeof LEAVE_TYPES)[number];
 
-const dateKey = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+export interface LeaveRequest {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  leaveType: LeaveType;
+  fromDate: string;
+  toDate: string;
+  days: number;
+  reason: string;
+  status: LeaveStatus;
+  decidedBy: string;
+  decidedAt: string | null;
+  decisionNote: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
-export const leaveInput = z
-  .object({
-    employeeId: z.string().trim().min(1, "Nhập mã nhân sự").max(64),
-    employeeName: z.string().trim().min(1, "Nhập tên nhân sự").max(200),
-    leaveType: leaveTypeSchema.default("ANNUAL"),
-    fromDate: dateKey,
-    toDate: dateKey,
-    reason: z.string().trim().min(10, "Lý do cần ít nhất 10 ký tự").max(1000),
-  })
-  .strict();
+/** `createSchema` is strict: only these keys may travel, defaults fill the rest. */
+export interface LeaveInput {
+  employeeId: string;
+  employeeName: string;
+  leaveType: LeaveType;
+  fromDate: string;
+  toDate: string;
+  reason: string;
+}
 
-export const leaveSchema = z
-  .object({
-    id: z.uuid(),
-    employeeId: z.string(),
-    employeeName: z.string(),
-    leaveType: leaveTypeSchema,
-    fromDate: z.string(),
-    toDate: z.string(),
-    days: z.number(),
-    reason: z.string(),
-    status: statusSchema,
-    decidedBy: z.string(),
-    decidedAt: z.iso.datetime().nullable(),
-    decisionNote: z.string(),
-    version: z.number().int().positive(),
-    createdAt: z.iso.datetime(),
-    updatedAt: z.iso.datetime(),
-  })
-  .strict();
+/** `updateSchema`: the workflow fields stay out; a version is mandatory. */
+export interface LeavePatch {
+  leaveType?: LeaveType;
+  fromDate?: string;
+  toDate?: string;
+  reason?: string;
+  version: number;
+}
 
-export const listSchema = z.object({
-  items: z.array(leaveSchema),
-  total: z.number(),
-  page: z.number(),
-  pageSize: z.number(),
-});
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
-export type Status = z.infer<typeof statusSchema>;
-export type LeaveType = z.infer<typeof leaveTypeSchema>;
-export type LeaveDto = z.infer<typeof leaveSchema>;
-export type LeaveInput = z.input<typeof leaveInput>;
+export interface PermissionSnapshot {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  actions: string[];
+}
+
+export interface PermissionsMe {
+  role: "EMPLOYEE" | "MANAGER";
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+/** `GET /auth/session` — the actor's own record, needed to file a request. */
+export interface Session {
+  actor: {
+    accountId: string;
+    employeeId: string;
+    username: string;
+    displayName: string;
+    role: "EMPLOYEE" | "MANAGER";
+    isSystemAdmin: boolean;
+    mustChangePassword: boolean;
+  };
+  idleMinutes: number;
+  expiresAt: string;
+}
+
+/** `GET /work-policies/quotas` — the tenant-wide annual allowance. */
+export interface LeaveQuota {
+  id: string;
+  year: number;
+  daysPerYear: number;
+  maxCarryOverDays: number;
+  note: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LeaveAction = "view" | "create" | "update" | "delete" | "approve";

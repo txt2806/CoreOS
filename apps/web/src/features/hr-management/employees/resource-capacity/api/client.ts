@@ -1,119 +1,173 @@
-import type { z } from "zod";
-import {
-  allocationInput,
-  allocationListSchema,
-  allocationSchema,
-  periodInput,
-  periodListSchema,
-  periodSchema,
-  workloadSchema,
-  type AllocationDto,
-  type AllocationInput,
-  type PeriodDto,
-  type PeriodInput,
-} from "@/features/hr-management/employees/resource-capacity/types";
+import type {
+  Allocation,
+  AllocationInput,
+  AllocationPatch,
+  AllocationStatus,
+  CapacityDetail,
+  PageResult,
+  Period,
+  PeriodInput,
+  PeriodPatch,
+  PermissionSnapshot,
+} from "../types";
 
+/**
+ * Every call goes through the same-origin proxy, so the HttpOnly session cookie
+ * travels with the request and no CORS preflight is involved.
+ */
 export class ApiError extends Error {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
+
   constructor(
-    public status: number,
+    status: number,
     message: string,
+    issues: { path: string; message: string }[] = [],
   ) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
   }
 }
 
-async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {},
-  schema?: z.ZodType<T>,
-): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-    cache: "no-store",
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok)
-    throw new ApiError(
-      response.status,
-      typeof body?.message === "string"
-        ? body.message
-        : "Không thể kết nối API. Vui lòng thử lại.",
-    );
-  return schema ? schema.parse(body) : (body as T);
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
 }
 
-export const client = {
-  listPeriods: (params: Record<string, string>, signal?: AbortSignal) => {
-    const query = new URLSearchParams({ pageSize: "100", ...params });
-    return apiRequest(
-      `/resource-capacity/periods?${query}`,
-      { signal },
-      periodListSchema,
-    );
-  },
-  createPeriod: (input: PeriodInput) =>
-    apiRequest(
-      "/resource-capacity/periods",
-      { method: "POST", body: JSON.stringify(periodInput.parse(input)) },
-      periodSchema,
-    ),
-  updatePeriod: (
-    record: PeriodDto,
-    patch: {
-      fromDate?: string;
-      toDate?: string;
-      standardHoursPerDay?: number;
-      holidayDays?: number;
-      note?: string;
-    },
-  ) =>
-    apiRequest(
-      `/resource-capacity/periods/${record.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ ...patch, version: record.version }),
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
       },
-      periodSchema,
-    ),
-  listAllocations: (params: Record<string, string>, signal?: AbortSignal) => {
-    const query = new URLSearchParams({ pageSize: "100", ...params });
-    return apiRequest(
-      `/resource-capacity/allocations?${query}`,
-      { signal },
-      allocationListSchema,
+    });
+  } catch {
+    throw new ApiError(0, "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.");
+  }
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
     );
-  },
-  createAllocation: (input: AllocationInput) =>
-    apiRequest(
-      "/resource-capacity/allocations",
-      { method: "POST", body: JSON.stringify(allocationInput.parse(input)) },
-      allocationSchema,
-    ),
-  updateAllocation: (
-    record: AllocationDto,
-    patch: {
-      projectRef?: string;
-      percentage?: number;
-      status?: string;
-      note?: string;
-    },
-  ) =>
-    apiRequest(
-      `/resource-capacity/allocations/${record.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ ...patch, version: record.version }),
-      },
-      allocationSchema,
-    ),
-  cancelAllocation: (record: AllocationDto) =>
-    apiRequest(
-      `/resource-capacity/allocations/${record.id}/cancel`,
-      { method: "POST", body: JSON.stringify({ version: record.version }) },
-      allocationSchema,
-    ),
-  workload: (periodId: string, signal?: AbortSignal) =>
-    apiRequest(`/workload/capacity/${periodId}`, { signal }, workloadSchema),
-};
+  }
+
+  return body as T;
+}
+
+export interface PeriodListQuery {
+  page: number;
+  pageSize: number;
+  q?: string;
+  /** `from`/`to` keep periods that overlap the window, not periods inside it. */
+  from?: string;
+  to?: string;
+}
+
+export function listPeriods(query: PeriodListQuery) {
+  const search = new URLSearchParams({
+    page: String(query.page),
+    pageSize: String(query.pageSize),
+  });
+  if (query.q?.trim()) search.set("q", query.q.trim());
+  if (query.from) search.set("from", query.from);
+  if (query.to) search.set("to", query.to);
+  return request<PageResult<Period>>(`/resource-capacity/periods?${search.toString()}`);
+}
+
+export function createPeriod(input: PeriodInput) {
+  return request<Period>("/resource-capacity/periods", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updatePeriod(id: string, input: PeriodPatch) {
+  return request<Period>(`/resource-capacity/periods/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+/** The only place available/allocated/remaining hours are calculated. */
+export function capacityDetail(periodId: string) {
+  return request<CapacityDetail>(`/resource-capacity/periods/${periodId}/summary`);
+}
+
+export interface AllocationListQuery {
+  periodId?: string;
+  employeeId?: string;
+  status?: AllocationStatus | "";
+  page?: number;
+  pageSize?: number;
+}
+
+export function listAllocations(query: AllocationListQuery = {}) {
+  const search = new URLSearchParams({
+    page: String(query.page ?? 1),
+    pageSize: String(query.pageSize ?? 100),
+  });
+  if (query.periodId) search.set("periodId", query.periodId);
+  if (query.employeeId) search.set("employeeId", query.employeeId);
+  if (query.status) search.set("status", query.status);
+  return request<PageResult<Allocation>>(
+    `/resource-capacity/allocations?${search.toString()}`,
+  );
+}
+
+export function createAllocation(input: AllocationInput) {
+  return request<Allocation>("/resource-capacity/allocations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateAllocation(id: string, input: AllocationPatch) {
+  return request<Allocation>(`/resource-capacity/allocations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+/** Cancelling keeps the row and its history; it only removes it from the sums. */
+export function cancelAllocation(id: string, version: number) {
+  return request<Allocation>(`/resource-capacity/allocations/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ version }),
+  });
+}
+
+/** One call answers every feature cell the actor holds; screens read their own. */
+export interface PermissionsMe {
+  role: PermissionSnapshot["role"];
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: string[] }[];
+}
+
+export function permissionsMe() {
+  return request<PermissionsMe>("/permissions/me");
+}
+
+export function actionsOf(body: PermissionsMe, featureKey: string): string[] {
+  return body.items.find((item) => item.featureKey === featureKey)?.actions ?? [];
+}

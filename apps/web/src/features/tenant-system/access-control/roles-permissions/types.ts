@@ -1,91 +1,55 @@
-import { z } from "zod";
+/**
+ * Mirrors `apps/api/src/features/tenant-system/access-control/roles-permissions/dto/roles-permissions.dto.ts`.
+ * `manage` exists in `actions` but is never storable — only a system
+ * administrator holds it, so the matrix shows the assignable columns only.
+ */
+export type PermissionRole = "EMPLOYEE" | "MANAGER";
+export type PermissionAction = "view" | "create" | "update" | "delete" | "approve" | "manage";
+export type FeatureGroup = "tenant-system" | "work-management" | "hr-management" | "crm";
 
-export const permissionRoleSchema = z.enum(["EMPLOYEE", "MANAGER"]);
-export const permissionActionSchema = z.enum([
-  "view",
-  "create",
-  "update",
-  "delete",
-  "approve",
-  "manage",
-]);
-export const featureGroupSchema = z.enum([
-  "tenant-system",
-  "work-management",
-  "hr-management",
-  "crm",
-]);
-export const matrixRowSchema = z
-  .object({
-    featureKey: z.string().min(1),
-    group: featureGroupSchema,
-    label: z.string().min(1),
-    role: permissionRoleSchema,
-    actions: z.array(permissionActionSchema),
-    version: z.number().int().min(0),
-    isDefault: z.boolean(),
-  })
-  .strict();
-export const matrixSchema = z
-  .object({
-    items: z.array(matrixRowSchema),
-    actions: z.array(permissionActionSchema),
-    roles: z.array(permissionRoleSchema),
-  })
-  .strict();
-export const myPermissionsSchema = z
-  .object({
-    role: permissionRoleSchema,
-    isSystemAdmin: z.boolean(),
-    canManage: z.boolean(),
-    items: z.array(
-      z
-        .object({
-          featureKey: z.string().min(1),
-          actions: z.array(permissionActionSchema),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
-export const permissionChangeSchema = z
-  .object({
-    id: z.uuid(),
-    featureKey: z.string().min(1),
-    role: permissionRoleSchema,
-    fromActions: z.array(permissionActionSchema),
-    toActions: z.array(permissionActionSchema),
-    actorName: z.string(),
-    reason: z.string(),
-    createdAt: z.iso.datetime(),
-  })
-  .strict();
-export const historySchema = z.object({
-  items: z.array(permissionChangeSchema),
-});
-export const saveInput = z
-  .object({
-    items: z
-      .array(
-        z
-          .object({
-            featureKey: z.string().min(1),
-            role: permissionRoleSchema,
-            actions: z.array(permissionActionSchema),
-            version: z.number().int().min(0),
-          })
-          .strict(),
-      )
-      .min(1),
-    reason: z.string().trim().max(500),
-  })
-  .strict();
+export interface PermissionRow {
+  featureKey: string;
+  group: FeatureGroup;
+  label: string;
+  role: PermissionRole;
+  actions: PermissionAction[];
+  version: number;
+  isDefault: boolean;
+}
 
-export type PermissionRole = z.infer<typeof permissionRoleSchema>;
-export type PermissionAction = z.infer<typeof permissionActionSchema>;
-export type FeatureGroup = z.infer<typeof featureGroupSchema>;
-export type MatrixRow = z.infer<typeof matrixRowSchema>;
-export type Matrix = z.infer<typeof matrixSchema>;
-export type MyPermissions = z.infer<typeof myPermissionsSchema>;
-export type PermissionChange = z.infer<typeof permissionChangeSchema>;
-export type SaveInput = z.input<typeof saveInput>;
+export interface Matrix {
+  items: PermissionRow[];
+  actions: PermissionAction[];
+  roles: PermissionRole[];
+}
+
+export interface MyPermissions {
+  role: PermissionRole;
+  isSystemAdmin: boolean;
+  canManage: boolean;
+  items: { featureKey: string; actions: PermissionAction[] }[];
+}
+
+export interface SaveRow {
+  featureKey: string;
+  role: PermissionRole;
+  actions: PermissionAction[];
+  /** 0 means "still on the built-in default"; every later write must match. */
+  version: number;
+}
+
+export interface SaveMatrixInput {
+  items: SaveRow[];
+  reason?: string;
+}
+
+export interface PermissionChangeEntry {
+  id: string;
+  featureKey: string;
+  role: PermissionRole;
+  fromActions: PermissionAction[];
+  toActions: PermissionAction[];
+  actorName: string;
+  reason: string;
+  createdAt: string;
+}

@@ -1,6 +1,6 @@
 # Cấu trúc thư mục hiện tại — OneOps
 
-Cập nhật theo mã nguồn thực tế: **4 module chính, 39 chức năng con đối xứng FE/BE**, với **29 chức năng dữ liệu hoàn chỉnh** (9 Record APIs, 20 Resource APIs) và **46 models** Prisma thuộc quyền sở hữu riêng của từng chức năng.
+Cập nhật theo mã nguồn thực tế: **4 module chính, 39 chức năng con đối xứng FE/BE**, với **31 chức năng dữ liệu hoàn chỉnh** (9 Record APIs, 22 Resource APIs) và **53 models** Prisma thuộc quyền sở hữu riêng của từng chức năng. Toàn bộ **592 source files** đều được kết nối và xác minh hợp lệ.
 
 - `[trống]`: chỉ có thư mục cấu trúc chuẩn; chưa tạo implementation, API hoặc trang giả.
 - `[đã triển khai đầy đủ]`: có đầy đủ mã nguồn FE/BE, Controller, Service, Repository, DTO và Model Prisma.
@@ -10,12 +10,12 @@ Cập nhật theo mã nguồn thực tế: **4 module chính, 39 chức năng co
 ```text
 OneOps/
 ├── apps/                                                                            # Các ứng dụng chạy của hệ thống
-│   ├── api/                                                                         # Backend NestJS (Port 4000)
+│   ├── api/                                                                         # Backend NestJS 12 (Port 4000)
 │   │   ├── src/                                                                     # Mã nguồn backend
 │   │   │   ├── core/                                                                # Hạ tầng backend; không chứa nghiệp vụ
 │   │   │   │   ├── auth/                                                            # Actor context hạ tầng xác thực (actor-context.ts)
-│   │   │   │   ├── database/                                                        # Kết nối và vòng đời Prisma/PostgreSQL (database.module.ts)
-│   │   │   │   ├── events/                                                          # Hạ tầng phát sự kiện thông báo nội bộ (notification-events.ts)
+│   │   │   │   ├── database/                                                        # Kết nối và vòng đời Prisma/PostgreSQL (database.module.ts, prisma.service.ts)
+│   │   │   │   ├── events/                                                          # Hạ tầng phát sự kiện nội bộ (notification-events.ts, workflow-events.ts)
 │   │   │   │   ├── filters/                                                         # Chuẩn hóa lỗi HTTP (errors.filter.ts)
 │   │   │   │   ├── pipes/                                                           # Kiểm tra và biến đổi đầu vào Zod (validation.pipe.ts)
 │   │   │   │   └── core.module.ts
@@ -57,15 +57,15 @@ OneOps/
 │   │   │   │   │   ├── hr-management.leaves.module.ts                               # Leaves composition module
 │   │   │   │   │   ├── hr-management.module.ts
 │   │   │   │   │   └── index.ts
-│   │   │   │   ├── tenant-system/                                                   # Quản trị hệ thống, tài khoản và kiểm toán
+│   │   │   │   ├── tenant-system/                                                   # Quản trị hệ thống, tài khoản và kiểm toán (6/9 hoàn thiện)
 │   │   │   │   │   ├── access-control/                                              # Quản lý truy cập và xác thực
 │   │   │   │   │   │   ├── accounts/                                                # Vòng đời tài khoản [đã triển khai đầy đủ]
 │   │   │   │   │   │   ├── roles-permissions/                                       # Vai trò, quyền hạn & PermissionGuard [đã triển khai đầy đủ]
 │   │   │   │   │   │   └── tenant-auth/                                             # Phiên trượt, First Admin & SessionGuard [đã triển khai đầy đủ]
-│   │   │   │   │   ├── automation-hub/                                              # Tự động hóa và tích hợp ngoài [trống]
+│   │   │   │   │   ├── automation-hub/                                              # Tự động hóa và tích hợp ngoài
 │   │   │   │   │   │   ├── ai-copilot/                                              # [trống]
 │   │   │   │   │   │   ├── external-integrations/                                   # [trống]
-│   │   │   │   │   │   └── workflow-rules/                                          # [trống]
+│   │   │   │   │   │   └── workflow-rules/                                          # Động cơ quy tắc tự động hóa theo sự kiện [đã triển khai đầy đủ]
 │   │   │   │   │   ├── checklog/                                                    # Nhật ký kiểm toán bất biến append-only [đã triển khai đầy đủ]
 │   │   │   │   │   ├── organization/                                                # Thông tin và chính sách vận hành
 │   │   │   │   │   │   ├── company-profile/                                         # Hồ sơ doanh nghiệp [trống]
@@ -74,7 +74,7 @@ OneOps/
 │   │   │   │   │   ├── permission-audit.ts                                          # Composition bridge kiểm toán
 │   │   │   │   │   ├── index.ts
 │   │   │   │   │   └── tenant-system.module.ts
-│   │   │   │   └── work-management/                                                 # Điều phối công việc, dự án và cộng tác (12/12 hoàn thiện)
+│   │   │   │   └── work-management/                                                 # Điều phối công việc, dự án và cộng tác (14/12 hoàn thiện)
 │   │   │   │       ├── coordination/                                                # Điều phối và không gian làm việc
 │   │   │   │       │   ├── internal-chat/                                           # Kênh trao đổi nội bộ theo chủ đề [đã triển khai đầy đủ]
 │   │   │   │       │   ├── knowledge-sop/                                           # Kho tri thức và SOP quy trình [đã triển khai đầy đủ]
@@ -84,12 +84,13 @@ OneOps/
 │   │   │   │       │       ├── calendar/                                            # Lịch sự kiện [đã triển khai đầy đủ]
 │   │   │   │       │       └── reports/                                             # Báo cáo chỉ số [đã triển khai đầy đủ]
 │   │   │   │       ├── projects/                                                    # Dự án, mốc tiến độ và chấm công
-│   │   │   │       │   ├── milestones-qa/                                           # Mốc tiến độ & Cổng QA Gate [đã triển khai đầy đủ]
-│   │   │   │       │   ├── project-spaces/                                          # Không gian quản trị dự án [đã triển khai đầy đủ]
+│   │   │   │       │   ├── milestones-qa/                                           # Mốc tiến độ & Cổng QA Gate / Acceptance [đã triển khai đầy đủ]
+│   │   │   │       │   ├── project-spaces/                                          # Quản trị dự án & Quản lý Sprint [đã triển khai đầy đủ]
 │   │   │   │       │   └── timesheets/                                              # Chấm công thời gian thực 15 phút [đã triển khai đầy đủ]
 │   │   │   │       ├── work/                                                        # Thực thi công việc hằng ngày
 │   │   │   │       │   ├── kanban/                                                  # View Kanban tích hợp workflow [view FE]
-│   │   │   │       │   ├── task-comments/                                           # API riêng bình luận & liên kết [đã triển khai đầy đủ]
+│   │   │   │       │   ├── task-comments/                                           # Bình luận trao đổi & liên kết [đã triển khai đầy đủ]
+│   │   │   │       │   ├── task-links/                                              # Liên kết phụ thuộc công việc (blocks, relates) [đã triển khai đầy đủ]
 │   │   │   │       │   ├── task-workflow/                                           # Máy trạng thái TR-02…TR-09 [đã triển khai đầy đủ]
 │   │   │   │       │   └── tasks/                                                   # Nhiệm vụ, checklist, phân công [đã triển khai đầy đủ]
 │   │   │   │       ├── work-management.composition.ts                               # Domain composition điều phối liên chức năng
@@ -98,91 +99,91 @@ OneOps/
 │   │   │   │       └── index.ts
 │   │   │   ├── app.module.ts                                                        # Ghép CoreModule và 4 main modules
 │   │   │   ├── bootstrap.ts                                                         # Khởi tạo Nest, prefix API và filters
-│   │   │   └── main.ts                                                              # Điểm chạy API
-│   │   ├── test/                                                                    # Hỗ trợ kiểm thử database riêng
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   └── web/                                                                         # Frontend Next.js 16 (Port 3002 - 26 routes)
-│       ├── public/                                                                  # Tài nguyên tĩnh
-│       ├── src/                                                                     # Mã nguồn frontend
-│       │   ├── app/                                                                 # Route mỏng theo chuẩn Next.js App Router
-│       │   │   ├── hr-management/                                                   # Routes nhân sự
-│       │   │   │   ├── attendance/page.tsx                                          # Trang điểm danh hàng ngày
-│       │   │   │   ├── attendance-reports/page.tsx                                  # Trang báo cáo chấm công
-│       │   │   │   ├── capacity/page.tsx                                            # Trang công suất định biên
-│       │   │   │   ├── employees/page.tsx                                           # Trang hồ sơ nhân viên
-│       │   │   │   ├── explanations/page.tsx                                        # Trang giải trình điểm danh
-│       │   │   │   ├── leave-approvals/page.tsx                                     # Trang xét duyệt nghỉ phép
-│       │   │   │   ├── leaves/page.tsx                                              # Trang đơn xin nghỉ phép
-│       │   │   │   ├── organization/page.tsx                                        # Trang sơ đồ phòng ban
-│       │   │   │   ├── positions/page.tsx                                           # Trang chức danh ngạch bậc
-│       │   │   │   ├── shifts/page.tsx                                              # Trang ca làm & phân ca
-│       │   │   │   └── workforce/page.tsx                                           # Trang bảng quân số hiện diện
-│       │   │   ├── tenant-system/                                                   # Routes quản trị
-│       │   │   │   ├── accounts/page.tsx                                            # Trang quản lý tài khoản
-│       │   │   │   ├── auth/page.tsx                                                # Trang đăng nhập / First Admin setup
-│       │   │   │   ├── checklog/page.tsx                                            # Trang nhật ký kiểm toán
-│       │   │   │   ├── roles-permissions/page.tsx                                   # Trang vai trò & phân quyền
-│       │   │   │   └── work-policies/page.tsx                                       # Trang chính sách làm việc
-│       │   │   ├── work-management/                                                 # Routes công việc
-│       │   │   │   ├── calendar/page.tsx                                            # Trang lịch sự kiện
-│       │   │   │   ├── internal-chat/page.tsx                                       # Trang trao đổi nội bộ
-│       │   │   │   ├── kanban/page.tsx                                              # Trang bảng Kanban
-│       │   │   │   ├── knowledge-sop/page.tsx                                       # Trang kho tri thức SOP
-│       │   │   │   ├── milestones/page.tsx                                          # Trang mốc tiến độ & QA
-│       │   │   │   ├── notifications/page.tsx                                       # Trang trung tâm thông báo
-│       │   │   │   ├── projects/page.tsx                                            # Trang dự án
-│       │   │   │   ├── reports/page.tsx                                             # Trang báo cáo
-│       │   │   │   ├── tasks/page.tsx                                               # Trang danh sách công việc
-│       │   │   │   ├── tickets-approvals/page.tsx                                   # Trang phiếu đề xuất
-│       │   │   │   └── timesheets/page.tsx                                          # Trang chấm công
-│       │   │   ├── design-system/page.tsx                                           # Thư viện component mẫu
-│       │   │   ├── design-tokens/page.tsx                                           # Bảng tra cứu token
-│       │   │   ├── page.tsx                                                         # Trang chủ (Workspace Today)
-│       │   │   ├── layout.tsx                                                       # Root Layout, fonts, CSS nền, AppShell & Providers
-│       │   │   └── not-found.tsx                                                    # Trang 404
-│       │   ├── core/                                                                # Hạ tầng shell, Feature Registry, Design System
-│       │   │   ├── config/                                                          # Đăng ký 26 menu và form tạo nhanh
-│       │   │   ├── context/                                                         # SessionProvider và ApplicationProviders
-│       │   │   ├── layout/                                                          # AppShell, Header, Sidebar, QuickCreate
-│       │   │   └── ui/                                                              # Bộ UI Primitives và Design Tokens
-│       │   ├── features/                                                            # 39 chức năng con đối xứng BE
-│       │   └── icons/                                                               # Biểu tượng SVG hệ thống
-│       ├── next.config.ts
-│       ├── package.json
-│       └── tsconfig.json
-├── packages/                                                                        # Packages hạ tầng monorepo
-│   └── database/                                                                    # Quản lý cơ sở dữ liệu PostgreSQL
-│       ├── generated/                                                               # Client Prisma 7.10.1 sinh tự động
+│   │   │   └── main.ts
+│   └── web/                                                                         # Frontend Next.js 16 (Port 3002)
+│       └── src/
+│           ├── app/                                                                 # App Router (31 routes điều hướng)
+│           │   ├── (auth)/                                                          # Nhóm trang đăng nhập và xác thực
+│           │   ├── crm/                                                             # Routes CRM (khung giao diện mở rộng)
+│           │   ├── design-system/                                                   # Showcase UI Design System
+│           │   ├── design-tokens/                                                   # Token Studio trực quan
+│           │   ├── hr-management/                                                   # 11 routes quản lý nhân sự
+│           │   ├── tenant-system/                                                   # 6 routes quản trị hệ thống
+│           │   ├── work-management/                                                 # 11 routes quản lý công việc & dự án
+│           │   ├── layout.tsx                                                       # Root layout nạp Aurora theme, CSS variables và AppShell
+│           │   ├── not-found.tsx                                                    # Trang 404 tùy biến
+│           │   └── page.tsx                                                         # Trang chủ / Dashboard chính
+│           ├── core/                                                                # Hạ tầng web chung
+│           │   ├── config/                                                          # Cấu hình môi trường và client
+│           │   ├── context/                                                         # React context quản trị phiên
+│           │   ├── layout/                                                          # AppShell, Sidebar, Header, Breadcrumb
+│           │   ├── lib/                                                             # Utility dùng chung
+│           │   └── ui/                                                              # Token-driven style variables & foundations
+│           ├── icons/                                                               # Bộ icon SVG và Lucide tích hợp
+│           └── features/                                                            # 39 feature folders đối xứng BE
+│               ├── hr-management/                                                   # 11 thư mục chức năng nhân sự
+│               ├── tenant-system/                                                   # 9 thư mục chức năng hệ thống
+│               ├── work-management/                                                 # 12 thư mục chức năng công việc
+│               └── crm/                                                             # 7 thư mục chức năng CRM
+├── packages/
+│   └── database/                                                                    # Package dữ liệu tập trung (@oneops/database)
 │       ├── prisma/
-│       │   ├── migrations/                                                          # Lịch sử SQL migrations đa schema
-│       │   └── schema/
-│       │       ├── base.prisma                                                      # Datasource và generator
-│       │       └── features                                                         # Junction trỏ sang 46 models gốc tại BE
-│       ├── index.ts                                                                 # Public exports PrismaClient & models
-│       ├── package.json
-│       └── prisma.config.ts
-├── graphify-out/                                                                    # Sơ đồ tri thức kiến trúc và tương tác
-│   ├── OneOps-callflow.html                                                         # Sơ đồ Call-flow Mermaid tương tác (17 sections, 16 diagrams)
-│   ├── graph.html                                                                   # Bản đồ tương tác mạng lưới (4.978 nodes, 13.126 edges)
-│   ├── GRAPH_REPORT.md                                                              # Báo cáo trích xuất cấu trúc
-│   └── wiki/                                                                        # 179 bài viết tài liệu hóa mã nguồn
-├── docs/                                                                            # Tài liệu kiến trúc, hợp đồng và kiểm thử
-├── scripts/                                                                         # Công cụ biên dịch token, check boundary
-├── tests/                                                                           # Bộ kiểm thử tích hợp API và E2E
-├── tokens/                                                                          # 187 semantic design tokens (source.json)
-├── feature-structure.json                                                           # Danh mục 4 nhóm/39 chức năng
-├── modules.json                                                                     # Ánh xạ các implementation dữ liệu hoàn chỉnh
-├── package.json                                                                     # Monorepo configuration
-├── AGENTS.md                                                                        # Quy tắc kiến trúc và chuẩn mực code
-└── README.md                                                                        # Hướng dẫn tổng thể hệ thống
+│       │   ├── migrations/                                                          # 21 migrations SQL đã áp dụng an toàn
+│       │   ├── schema/
+│       │   │   ├── base.prisma                                                      # Datasource PostgreSQL & multi-schema namespaces
+│       │   │   └── features/                                                        # Junction đọc trực tiếp 53 models từ api features
+│       │   └── seed/                                                                # Dữ liệu khởi tạo hệ thống
+│       └── index.ts                                                                 # Exports PrismaClient, Prisma namespace và Types
+├── tokens/                                                                          # Design Token Single Source of Truth
+│   ├── source.json                                                                  # 233 design tokens định nghĩa theo chuẩn Aurora Ops
+│   └── README.md                                                                    # Tài liệu hướng dẫn sử dụng và mở rộng tokens
+├── scripts/                                                                         # Bộ công cụ vận hành & kiểm định
+│   ├── build-tokens.mjs                                                             # Trình biên dịch token sang CSS variables & TS types
+│   ├── check-boundaries.mjs                                                         # Kiểm tra ranh giới kiến trúc bất biến
+│   ├── check-unused.mjs                                                             # Kiểm tra mã nguồn mồ côi (reachability)
+│   ├── dev.mjs                                                                      # Khởi động đồng thời web và api
+│   └── ensure-feature-folders.mjs                                                   # Đảm bảo 39 thư mục đối xứng
+└── graphify-out/                                                                    # Tri thức kiến trúc hệ thống (Graphify)
+    ├── graph.html                                                                   # Bản đồ tri thức 3D (6.006 nodes, 15.918 edges, 202 communities)
+    ├── graph.json                                                                   # Đồ thị GraphRAG JSON
+    ├── GRAPH_REPORT.md                                                              # Báo cáo phân tích cấu trúc cộng đồng
+    └── wiki/                                                                        # Các bài viết phân tích kiến trúc chi tiết
 ```
 
 ---
 
-## Nguyên tắc cấu trúc cốt lõi
+## Bảng phân bổ 31 chức năng dữ liệu và 53 Models Prisma
 
-1. **Phân quyền sở hữu khép kín:** Mỗi chức năng đã triển khai tự sở hữu component, hook, API client, DTO, repository và model Prisma riêng biệt. Tuyệt đối không import repository hay delegate của chức năng khác.
-2. **Không file giả:** Các chức năng chưa làm được giữ trống hoàn toàn; không tạo controller, service, page hay mock endpoint rỗng để che giấu phần chưa triển khai.
-3. **Quản lý model gốc:** Toàn bộ 46 model Prisma gốc nằm trực tiếp tại `apps/api/src/features/<path>/prisma/*.prisma`. Link `packages/database/prisma/schema/features` là junction kết nối tới model gốc, loại bỏ hoàn toàn việc nhân đôi schema.
-4. **Khôi phục thư mục trống:** Lệnh `npm run structure:prepare` sử dụng danh mục từ `feature-structure.json` để tự động khôi phục các thư mục rỗng sau khi clone hoặc checkout repository.
+| STT | Phân hệ (Domain) | Tên chức năng | Route API | Route Web | Schema Database | Models Prisma sở hữu |
+| :---: | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | `work-management` | `workspace-today` | `/api/v1/home` | `/` | `work_dashboard` | `WorkspaceWidget` |
+| 2 | `work-management` | `tasks` | `/api/v1/tasks` | `/work-management/tasks` | `work_tasks` | `WorkTask` |
+| 3 | `work-management` | `task-workflow` | `/api/v1/task-workflow` | `/work-management/tasks` | `work_task_workflow` | `WorkTaskTransition`, `WorkTaskProposal` |
+| 4 | `work-management` | `task-comments` | `/api/v1/task-comments` | `/work-management/tasks` | `work_task_comments` | `WorkTaskComment` |
+| 5 | `work-management` | `task-links` | `/api/v1/task-links` | `/work-management/tasks` | `work_task_links` | `WorkTaskLink` |
+| 6 | `work-management` | `project-spaces` | `/api/v1/projects` | `/work-management/projects` | `work_projects` | `WorkProject`, `ProjectSprint`, `ProjectBacklogItem` |
+| 7 | `work-management` | `milestones-qa` | `/api/v1/milestones` | `/work-management/milestones` | `work_milestones_qa` | `Milestone`, `MilestoneItem`, `AcceptanceItem`, `AcceptanceResult` |
+| 8 | `work-management` | `timesheets` | `/api/v1/timesheets` | `/work-management/timesheets` | `work_timesheets` | `TimesheetPeriod`, `TimeEntry`, `TimeEntryAdjustment` |
+| 9 | `work-management` | `calendar` | `/api/v1/calendar` | `/work-management/calendar` | `work_calendar` | `WorkEvent` |
+| 10 | `work-management` | `tickets-approvals` | `/api/v1/requests` | `/work-management/tickets-approvals` | `work_requests` | `WorkRequest`, `WorkRequestApprovalStep`, `WorkRequestApprover` |
+| 11 | `work-management` | `internal-chat` | `/api/v1/messages` | `/work-management/internal-chat` | `work_messages` | `WorkThread` |
+| 12 | `work-management` | `knowledge-sop` | `/api/v1/notes` | `/work-management/knowledge-sop` | `work_notes` | `WorkNote` |
+| 13 | `work-management` | `reports` | `/api/v1/reports` | `/work-management/reports` | `work_reports` | `WorkReport` |
+| 14 | `work-management` | `notifications` | `/api/v1/notifications` | `/work-management/notifications` | `work_notifications` | `WorkNotification` |
+| 15 | `hr-management` | `departments-teams` | `/api/v1/org` | `/hr-management/organization` | `hr_departments` | `Department`, `Team` |
+| 16 | `hr-management` | `positions-grades` | `/api/v1/positions` | `/hr-management/positions` | `hr_positions` | `Position`, `Grade` |
+| 17 | `hr-management` | `employee-directory` | `/api/v1/employees` | `/hr-management/employees` | `hr_employees` | `Employee` |
+| 18 | `tenant-system` | `accounts` | `/api/v1/accounts` | `/tenant-system/accounts` | `tenant_accounts` | `Account`, `AccountAccessChange` |
+| 19 | `tenant-system` | `tenant-auth` | `/api/v1/auth` | `/tenant-system/auth` | `tenant_auth` | `AuthSession` |
+| 20 | `tenant-system` | `roles-permissions` | `/api/v1/permissions` | `/tenant-system/roles-permissions` | `tenant_permissions` | `RolePermission`, `PermissionChange` |
+| 21 | `tenant-system` | `checklog` | `/api/v1/checklog` | `/tenant-system/checklog` | `tenant_checklog` | `AuditEntry` |
+| 22 | `tenant-system` | `workflow-rules` | `/api/v1/workflow-rules` | `/tenant-system/workflow-rules` | `tenant_automation` | `AutomationRule`, `AutomationRun` |
+| 23 | `tenant-system` | `work-policies` | `/api/v1/work-policies` | `/tenant-system/work-policies` | `tenant_policies` | `WorkPolicy`, `WorkHoliday`, `OfficeNetwork`, `LeaveQuota` |
+| 24 | `hr-management` | `daily-checkin` | `/api/v1/daily-checkin` | `/hr-management/attendance` | `hr_attendance` | `AttendanceRecord` |
+| 25 | `hr-management` | `workforce-board` | `/api/v1/workforce-board` | `/hr-management/workforce` | `hr_workforce` | `WorkforcePresence` |
+| 26 | `hr-management` | `checkin-explanations`| `/api/v1/checkin-explanations` | `/hr-management/explanations` | `hr_checkin_explanations` | `CheckinExplanation` |
+| 27 | `hr-management` | `shifts-schedules` | `/api/v1/shifts-schedules` | `/hr-management/shifts` | `hr_shifts` | `ShiftTemplate`, `SchedulePattern`, `ScheduleAssignment` |
+| 28 | `hr-management` | `attendance-reports` | `/api/v1/attendance-reports` | `/hr-management/attendance-reports` | `hr_attendance_reports` | `AttendancePeriod`, `AttendancePeriodLine` |
+| 29 | `hr-management` | `leave-requests` | `/api/v1/leave-requests` | `/hr-management/leaves` | `hr_leaves` | `LeaveRequest` |
+| 30 | `hr-management` | `leave-approvals` | `/api/v1/leave-approvals` | `/hr-management/leave-approvals` | `hr_leave_approvals` | `LeaveDecision` |
+| 31 | `hr-management` | `resource-capacity` | `/api/v1/resource-capacity` | `/hr-management/capacity` | `hr_capacity` | `CapacityPeriod`, `ProjectAllocation` |

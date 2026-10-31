@@ -1,1 +1,2 @@
-export { TaskComments } from "@/features/work-management/work/task-comments/components/task-comments";
+export { CommentThread } from "./components/thread";
+export type { CommentPage, TaskComment } from "./types";

@@ -1,361 +1,445 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import type { RecordDto } from "@/features/work-management/coordination/workspace-today/reports/types";
-import { definition } from "@/features/work-management/coordination/workspace-today/reports/constants";
-import { client } from "@/features/work-management/coordination/workspace-today/reports/api/client";
+
+import { useMemo, useState } from "react";
+import { REPORT_STATUSES } from "../types";
+import type { ReportStatus, WorkReport } from "../types";
+import { formatDate, share } from "../format";
+import { useReports, type Feedback } from "../hooks/use-reports";
+import { CreateReportDialog } from "./create-dialog";
+import { ReportSheet } from "./report-sheet";
+import { ReportBreakdowns } from "./breakdowns";
 import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/coordination/workspace-today/reports/hooks/use-records";
-import {
-  Modal,
-  useWorkspace,
-} from "@/features/work-management/coordination/workspace-today/reports/components/primitives/workspace";
-import { Button } from "@/features/work-management/coordination/workspace-today/reports/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/work-management/coordination/workspace-today/reports/components/primitives/forms";
-import { Badge } from "@/features/work-management/coordination/workspace-today/reports/components/primitives/foundations";
-import { RecordForm } from "@/features/work-management/coordination/workspace-today/reports/components/record-form";
-import styles from "@/features/work-management/coordination/workspace-today/reports/components/styles.module.css";
-import { WorkspaceMetrics } from "@/features/work-management/coordination/workspace-today/reports/components/workspace-metrics";
-export function ModulePage() {
-  const params = useSearchParams();
-  const { openCreate, notify } = useWorkspace();
-  const { records, loading, error, reload } = useModuleRecords();
-  const [query, setQuery] = useState(params.get("q") || "");
-  const [status, setStatus] = useState("");
-  const [detail, setDetail] = useState<RecordDto | null>(null),
-    [editing, setEditing] = useState<RecordDto | null>(null),
-    [deleting, setDeleting] = useState<RecordDto | null>(null),
-    [pending, setPending] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [view, setView] = useState("list");
-  const effectiveStatus =
-    status === "all" ? "" : status || params.get("status") || "";
-  const filtered = records.filter(
-    (record) =>
-      (!effectiveStatus || record.status === effectiveStatus) &&
-      `${record.code} ${record.name} ${record.assignee} ${record.note} ${Object.values(record.fields).join(" ")}`
-        .toLocaleLowerCase("vi")
-        .includes(query.trim().toLocaleLowerCase("vi")),
+  CloseGlyph,
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+  SkeletonRows,
+  SortButton,
+  StatusBadge,
+} from "./primitives";
+
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
+
+const COLUMNS = 6;
+
+type SortKey = "name" | "date";
+
+function sortReports(reports: WorkReport[], key: SortKey, dir: "asc" | "desc") {
+  const factor = dir === "asc" ? 1 : -1;
+  return [...reports].sort((left, right) => {
+    if (key === "date") return (left.date.localeCompare(right.date) || left.id.localeCompare(right.id)) * factor;
+    return left.name.localeCompare(right.name, "vi") * factor;
+  });
+}
+
+export function ReportsPage() {
+  const reports = useReports();
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "date",
+    dir: "desc",
+  });
+  const [creating, setCreating] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  /* Optimistic statuses are applied at render so every count agrees. */
+  const rows = useMemo(
+    () =>
+      reports.data.items.map((report) => {
+        const next = reports.optimistic[report.id];
+        return next ? { ...report, status: next } : report;
+      }),
+    [reports.data.items, reports.optimistic],
   );
-  async function update(
-    record: RecordDto,
-    patch: Parameters<typeof client.update>[1],
-  ) {
-    if (pending) return false;
-    setPending(true);
-    setActionError("");
-    try {
-      const next = await client.update(record, patch);
-      setDetail((current) => (current?.id === next.id ? next : current));
-      recordsChanged();
-      notify("Đã cập nhật thành công.");
-      return true;
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Không thể cập nhật");
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }
-  function exportCsv() {
-    const cell = (value: string) =>
-      '"' +
-      (/^[=+@-]/.test(value) ? "'" : "") +
-      value.replaceAll('"', '""') +
-      '"';
-    const csv = [
-      [
-        "Mã",
-        "Tiêu đề",
-        "Trạng thái",
-        definition.dateLabel,
-        definition.personLabel,
-      ],
-      ...filtered.map((r) => [r.code, r.name, r.status, r.date, r.assignee]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
+
+  const sorted = useMemo(() => sortReports(rows, sort.key, sort.dir), [rows, sort]);
+
+  const canCreate = reports.can("create");
+  const canUpdate = reports.can("update");
+  const canDelete = reports.can("delete");
+  const forbidden = reports.error?.status === 403;
+
+  const total = reports.data.total;
+  const draft = reports.totals["Bản nháp"] ?? 0;
+  const published = reports.totals["Đã phát hành"] ?? 0;
+  const all = draft + published;
+  const known = Object.keys(reports.totals).length > 0;
+  const detail = openId ? (rows.find((report) => report.id === openId) ?? null) : null;
+
+  const toggleSort = (key: SortKey) =>
+    setSort((current) =>
+      current.key === key
+        ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: key === "date" ? "desc" : "asc" },
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "reports.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+
+  const ariaSort = (key: SortKey) =>
+    sort.key === key ? (sort.dir === "asc" ? "ascending" : "descending") : "none";
 
   return (
-    <div className={styles.root}>
-      <div className="module-view">
-        <section className="records-panel">
-          <div className={styles.header}>
-            <div>
-              <h1>{definition.title}</h1>
-              <p>Tổng hợp tiến độ thực tế và lưu báo cáo công việc.</p>
-            </div>
-            <div className={styles.actions}>
-              <Button variant="secondary" onClick={exportCsv}>
-                Xuất CSV
-              </Button>
-              <Button onClick={openCreate}>Tạo mới</Button>
-            </div>
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Điều phối công việc</p>
+          <h1>Báo cáo</h1>
+          <p className="page-lede">
+            Báo cáo vận hành theo kỳ, kèm phân tích trên dữ liệu đang tải: nhịp phát hành
+            theo tháng, tỷ trọng trạng thái và phân bổ theo người lập, phạm vi.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setCreating(true)}
+            disabled={!canCreate}
+            title={canCreate ? "Tạo báo cáo mới" : "Bạn không có quyền tạo báo cáo"}
+          >
+            <PlusGlyph /> Tạo báo cáo
+          </button>
+        </div>
+      </header>
+
+      {known ? (
+        <section className="metric-strip" aria-label="Tình hình báo cáo">
+          <div className="metric">
+            <span className="metric-value tabular">{all.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Tổng báo cáo</span>
+            <span className="metric-note">toàn hệ thống theo quyền của bạn</span>
           </div>
-          <WorkspaceMetrics />
-          <div className={styles.toolbar}>
-            <Input
-              aria-label="Tìm kiếm"
-              placeholder={"Tìm " + definition.singular + "…"}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <Select
-              aria-label="Lọc trạng thái"
-              value={effectiveStatus}
-              onChange={(e) => setStatus(e.target.value || "all")}
-            >
-              <option value="">Tất cả trạng thái</option>
-              {definition.statuses.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </Select>
-            <Button
-              variant={view === "list" ? "primary" : "secondary"}
-              onClick={() => setView("list")}
-            >
-              Danh sách
-            </Button>
-            <Button
-              variant={view === "cards" ? "primary" : "secondary"}
-              onClick={() => setView("cards")}
-            >
-              Thẻ
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              {filtered.length} mục
+          <div className="metric">
+            <span className="metric-value tabular">{published.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Đã phát hành</span>
+            <span className="metric-note">{share(published, all)}</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{draft.toLocaleString("vi-VN")}</span>
+            <span className="metric-label">Bản nháp</span>
+            <span className="metric-note">{share(draft, all)}</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">
+              {all ? `${Math.round((published / all) * 100)}%` : "—"}
+            </span>
+            <span className="metric-label">Tỷ lệ phát hành</span>
+            <span className="metric-note">
+              {all ? "trên tổng số báo cáo" : "chưa có dữ liệu"}
             </span>
           </div>
-          {(error || actionError) && (
-            <div role="alert" className="error">
-              {error || actionError}
-              <Button variant="ghost" onClick={reload}>
-                Thử lại
-              </Button>
+        </section>
+      ) : null}
+
+      {reports.feedback ? (
+        <div className={ALERT_TONE[reports.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{reports.feedback.message}</span>
+            {reports.feedback.hint ? (
+              <span className="muted">{reports.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => reports.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="report-search"
+                  className="input"
+                  type="search"
+                  value={reports.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo mã hoặc tên báo cáo…"
+                  aria-label="Tìm báo cáo"
+                  onChange={(event) => reports.patchQuery({ q: event.target.value, page: 1 })}
+                />
+                {reports.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => reports.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={reports.query.status ?? ""}
+                aria-label="Lọc theo trạng thái báo cáo"
+                onChange={(event) =>
+                  reports.patchQuery({
+                    status: event.target.value as ReportStatus | "",
+                    page: 1,
+                  })
+                }
+                style={{ width: 176 }}
+              >
+                <option value="">Mọi trạng thái</option>
+                {REPORT_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-          {loading ? (
-            <p role="status">Đang tải dữ liệu…</p>
-          ) : !filtered.length ? (
-            <div className={styles.empty}>
-              <h2>Chưa có {definition.singular} phù hợp</h2>
-              <p>Tạo nội dung đầu tiên hoặc thay đổi điều kiện tìm kiếm.</p>
-              <Button onClick={openCreate}>Tạo mới</Button>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {total.toLocaleString("vi-VN")} báo cáo
+                {reports.filtersActive ? ` · ${rows.length} dòng khớp` : ""}
+              </span>
             </div>
-          ) : (
-            <>
-              {view === "list" ? (
-                <div className={styles.scroll}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Mã</th>
-                        <th>Tiêu đề</th>
-                        <th>Trạng thái</th>
-                        <th>{definition.dateLabel}</th>
-                        <th>{definition.personLabel}</th>
-                        <th>Thao tác</th>
-                      </tr>
-                    </thead>
+          </div>
+
+          {reports.filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {reports.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{reports.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => reports.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {reports.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {reports.query.status}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => reports.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {reports.query.assignee ? (
+                <span className="chip" data-active="true">
+                  Người lập: {reports.query.assignee}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => reports.patchQuery({ assignee: "", page: 1 })}
+                    aria-label="Bỏ lọc người lập"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {reports.query.scope ? (
+                <span className="chip" data-active="true">
+                  Phạm vi: {reports.query.scope}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => reports.patchQuery({ scope: "", page: 1 })}
+                    aria-label="Bỏ lọc phạm vi"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={reports.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem báo cáo</span>
+            <p className="empty-body">
+              Yêu cầu quản trị hệ thống cấp quyền “Xem” cho phân hệ Điều phối công việc rồi
+              tải lại trang.
+            </p>
+            <button type="button" className="btn btn-ghost" onClick={reports.reload}>
+              Tải lại
+            </button>
+          </div>
+        ) : reports.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách báo cáo</span>
+            <p className="empty-body">{reports.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={reports.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : (
+          <>
+            {reports.loading || rows.length > 0 ? (
+              <div className="surface-body">
+                <ReportBreakdowns
+                  reports={rows}
+                  loading={reports.loading}
+                  onFilterAssignee={(assignee) =>
+                    reports.patchQuery({
+                      assignee: assignee === "Chưa gán người lập" ? "" : assignee,
+                      page: 1,
+                    })
+                  }
+                  onFilterScope={(scope) =>
+                    reports.patchQuery({
+                      scope: scope === "Chưa gắn phạm vi" ? "" : scope,
+                      page: 1,
+                    })
+                  }
+                />
+                <div className="divider" />
+              </div>
+            ) : null}
+
+            {!reports.loading && rows.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-title">
+                  {reports.filtersActive
+                    ? "Không có báo cáo nào khớp bộ lọc"
+                    : "Chưa có báo cáo nào"}
+                </span>
+                <p className="empty-body">
+                  {reports.filtersActive
+                    ? "Bộ lọc hiện tại không trả về báo cáo nào. Xoá bớt điều kiện để xem toàn bộ."
+                    : "Tạo báo cáo đầu tiên để bắt đầu tổng hợp số liệu theo kỳ và phát hành cho người đọc."}
+                </p>
+                {reports.filtersActive ? (
+                  <button type="button" className="btn btn-ghost" onClick={reports.clearFilters}>
+                    Xoá bộ lọc
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setCreating(true)}
+                    disabled={!canCreate}
+                  >
+                    <PlusGlyph /> Tạo báo cáo
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="table-scroll">
+                <table className="data-table">
+                  <caption>Báo cáo theo bộ lọc hiện tại, sắp xếp áp dụng trên trang này</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Mã</th>
+                      <th scope="col" aria-sort={ariaSort("name")}>
+                        <SortButton
+                          label="Tên báo cáo"
+                          active={sort.key === "name"}
+                          direction={sort.dir}
+                          onClick={() => toggleSort("name")}
+                        />
+                      </th>
+                      <th scope="col">Kỳ</th>
+                      <th scope="col">Người lập</th>
+                      <th scope="col" aria-sort={ariaSort("date")}>
+                        <SortButton
+                          label="Ngày"
+                          active={sort.key === "date"}
+                          direction={sort.dir}
+                          onClick={() => toggleSort("date")}
+                        />
+                      </th>
+                      <th scope="col">Trạng thái</th>
+                    </tr>
+                  </thead>
+                  {reports.loading ? (
+                    <SkeletonRows rows={5} columns={COLUMNS} />
+                  ) : (
                     <tbody>
-                      {filtered.map((record) => (
-                        <tr key={record.id}>
-                          <td>{record.code}</td>
+                      {sorted.map((report) => (
+                        <tr key={report.id}>
+                          <td>
+                            <span className="mono">{report.code}</span>
+                          </td>
                           <td>
                             <button
-                              className="font-medium"
-                              onClick={() => setDetail(record)}
+                              type="button"
+                              className="link truncate"
+                              onClick={() => setOpenId(report.id)}
+                              title={report.name}
                             >
-                              {record.name}
+                              {report.name}
                             </button>
                           </td>
-                          <td>
-                            <Select
-                              aria-label={"Trạng thái " + record.code}
-                              disabled={pending}
-                              value={record.status}
-                              onChange={(e) =>
-                                void update(record, {
-                                  status: e.target.value as RecordDto["status"],
-                                })
-                              }
-                            >
-                              {definition.statuses.map((s) => (
-                                <option key={s}>{s}</option>
-                              ))}
-                            </Select>
+                          <td className="truncate">{report.fields.period || "—"}</td>
+                          <td>{report.assignee || "Chưa giao"}</td>
+                          <td className="tabular">
+                            <span>{formatDate(report.date)}</span>
                           </td>
-                          <td>{record.date}</td>
-                          <td>{record.assignee || "Chưa phân công"}</td>
                           <td>
-                            <div className={styles.actions}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setEditing(record)}
-                              >
-                                Sửa
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleting(record)}
-                              >
-                                Xóa
-                              </Button>
-                            </div>
+                            <StatusBadge status={report.status} />
                           </td>
                         </tr>
                       ))}
                     </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className={styles.grid}>
-                  {filtered.map((record) => (
-                    <article className={styles.card} key={record.id}>
-                      <div className={styles.meta}>
-                        <span>{record.code}</span>
-                        <Badge>{record.status}</Badge>
-                      </div>
-                      <h3>
-                        <button
-                          type="button"
-                          className={styles.titleLink}
-                          onClick={() => setDetail(record)}
-                        >
-                          {record.name}
-                        </button>
-                      </h3>
-                      <p className="text-sm text-muted-foreground line-clamp-3">
-                        {record.note}
-                      </p>
-                      <div className={styles.meta}>
-                        <span>{record.assignee || "Chưa phân công"}</span>
-                        <span>{record.date}</span>
-                      </div>
-                      <div className={styles.actions}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditing(record)}
-                        >
-                          Sửa
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDeleting(record)}
-                        >
-                          Xóa
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-      {detail && (
-        <Modal title={detail.name} onClose={() => setDetail(null)}>
-          <div className={styles.details}>
-            <Badge>{detail.status}</Badge>
-            <p>
-              <strong>{detail.code}</strong> · {detail.date} ·{" "}
-              {detail.assignee || "Chưa phân công"}
-            </p>
-            <p>{detail.note || "Chưa có mô tả."}</p>
-            {Object.entries(detail.fields)
-              .filter(([, value]) => !Array.isArray(value))
-              .map(([key, value]) => (
-                <p key={key}>
-                  <strong>
-                    {definition.fields.find((field) => field.key === key)
-                      ?.label || key}
-                    :{" "}
-                  </strong>
-                  {String(value)}
-                </p>
-              ))}
-          </div>
-          <footer>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setEditing(detail);
-                setDetail(null);
-              }}
-            >
-              Chỉnh sửa
-            </Button>
-            <Button onClick={() => setDetail(null)}>Đóng</Button>
-          </footer>
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={"Chỉnh sửa " + definition.singular}
-          onClose={() => setEditing(null)}
-        >
-          <RecordForm record={editing} onClose={() => setEditing(null)} />
-        </Modal>
-      )}
-      {deleting && (
-        <Modal title="Xác nhận xóa" onClose={() => setDeleting(null)}>
-          <div className="form-body">
-            <p>Bạn muốn xóa “{deleting.name}”?</p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
+                  )}
+                </table>
+              </div>
             )}
-          </div>
-          <footer>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={pending}
-              onClick={async () => {
-                if (pending) return;
-                setPending(true);
-                setActionError("");
-                try {
-                  await client.remove(deleting);
-                  recordsChanged();
-                  setDeleting(null);
-                  notify("Đã xóa thành công.");
-                } catch (e) {
-                  setActionError(
-                    e instanceof Error ? e.message : "Không thể xóa",
-                  );
-                } finally {
-                  setPending(false);
-                }
-              }}
-            >
-              Xóa
-            </Button>
-          </footer>
-        </Modal>
-      )}
+          </>
+        )}
+
+        {!forbidden && !reports.error && rows.length > 0 ? (
+          <Pagination
+            id="reports"
+            page={reports.query.page}
+            pageSize={reports.query.pageSize}
+            total={total}
+            onPage={(page) => reports.patchQuery({ page })}
+            onPageSize={(pageSize) => reports.patchQuery({ pageSize, page: 1 })}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Phân tích chỉ đếm các báo cáo đang tải trên trang này — máy chủ chưa mở endpoint tổng
+        hợp nên không có chuỗi thời gian toàn hệ thống. Thu hẹp bộ lọc hoặc tăng số dòng để
+        phân tích đủ hơn.
+      </p>
+
+      {creating ? (
+        <CreateReportDialog onCreate={reports.create} onClose={() => setCreating(false)} />
+      ) : null}
+
+      {detail ? (
+        <ReportSheet
+          report={detail}
+          status={detail.status}
+          canUpdate={canUpdate}
+          canDelete={canDelete}
+          pending={reports.pending === detail.id}
+          onChangeStatus={(status) => reports.changeStatus(detail, status)}
+          onDelete={() => reports.remove(detail)}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
     </div>
   );
 }

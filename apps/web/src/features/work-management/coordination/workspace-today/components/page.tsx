@@ -1,493 +1,423 @@
 "use client";
+
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowUpRight,
-  CalendarDays,
-  CircleAlert,
-  Compass,
-  FolderKanban,
-  ListChecks,
-  Pin,
-  RefreshCw,
-  Sparkles,
-  Workflow,
-} from "lucide-react";
-import { client } from "@/features/work-management/coordination/workspace-today/api/client";
+  APPROVAL_LIMIT,
+  ATTENDANCE_STATUS_LABEL,
+  NOTICE_LIMIT,
+  TASK_LIMIT,
+  TASK_STATUS_TONE,
+} from "../constants";
 import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/coordination/workspace-today/hooks/use-records";
-import { useWorkspace } from "@/features/work-management/coordination/workspace-today/components/primitives/workspace";
-import { Button } from "@/features/work-management/coordination/workspace-today/components/primitives/button";
-import styles from "@/features/work-management/coordination/workspace-today/components/styles.module.css";
+  durationLabel,
+  formatDate,
+  formatDateTime,
+  greeting,
+  minutesBetween,
+  nowClock,
+  todayIso,
+  weekdayLabel,
+} from "../format";
+import { useToday } from "../hooks/use-today";
 
-const statusTone: Record<string, string> = {
-  "Đang làm": "info",
-  "Chờ kiểm tra": "warning",
-  "Làm lại": "warning",
-  "Hoàn thành": "success",
-  "Đã hủy": "danger",
-};
+const CLOSED = ["Hoàn thành", "Đã hủy"];
 
-const value = (input?: number) => (input === undefined ? "—" : input);
-const today = new Intl.DateTimeFormat("vi-VN", {
-  weekday: "long",
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-}).format(new Date());
+function WidgetHead({ id, title, note }: { id: string; title: string; note: string }) {
+  return (
+    <div className="widget-head">
+      <div className="stack gap-1">
+        <h2 className="widget-title" id={id}>
+          {title}
+        </h2>
+        <span className="widget-note">{note}</span>
+      </div>
+    </div>
+  );
+}
 
-const steps = [
-  {
-    title: "Nắm việc của mình trong một màn",
-    body: "Lọc theo người thực hiện, hạn chót và trạng thái.",
-    href: "/work-management/tasks",
-    action: "Mở bảng công việc",
-  },
-  {
-    title: "Chấm công và gửi đơn nghỉ",
-    body: "Chấm công vào ca, gửi nghỉ phép, theo dõi kết quả duyệt.",
-    href: "/hr-management/attendance",
-    action: "Chấm công hôm nay",
-  },
-  {
-    title: "Để hệ thống nhắc thay bạn",
-    body: "Quy tắc tự động thông báo khi công việc đổi trạng thái.",
-    href: "/tenant-system/workflow-rules",
-    action: "Xem quy tắc tự động",
-  },
-];
+function Lines({ rows = 2 }: { rows?: number }) {
+  return (
+    <div className="stack gap-2" aria-busy="true">
+      {Array.from({ length: rows }, (_, index) => (
+        <span
+          key={index}
+          className="skeleton skeleton-line"
+          style={{ width: index === 0 ? "82%" : "64%" }}
+        />
+      ))}
+    </div>
+  );
+}
 
-export function ModulePage() {
-  const [summary, setSummary] = useState<Awaited<
-      ReturnType<typeof client.summary>
-    > | null>(null),
-    [error, setError] = useState("");
-  const [revision, setRevision] = useState(0);
-  const [busy, setBusy] = useState(false);
-  const { records } = useModuleRecords();
-  const { openCreate } = useWorkspace();
+/**
+ * The morning screen. It composes five existing endpoints — no summary route was
+ * invented for it, and every widget states its own failure.
+ */
+export function WorkspaceTodayPage() {
+  const today = useToday();
+  const [now, setNow] = useState<Date | null>(null);
+
+  /* Time-dependent text renders after mount so SSR and client agree exactly. */
   useEffect(() => {
-    const controller = new AbortController();
-    client
-      .summary(controller.signal)
-      .then((result) => {
-        setSummary(result);
-        setError("");
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted)
-          setError(e instanceof Error ? e.message : "Không tải được tổng quan");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setBusy(false);
-      });
-    return () => controller.abort();
-  }, [revision]);
+    setNow(new Date());
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  const loading = !summary && !error;
-  const openTasks = summary ? summary.totalTasks - summary.completedTasks : 0;
-  const overdue = summary?.overdueTasks ?? 0;
-  const rate = Math.max(0, Math.min(100, summary?.completionRate ?? 0));
-  const pins = records.filter((record) => record.status === "Đang dùng");
-  const circumference = 2 * Math.PI * 52;
+  const dayKey = now ? todayIso(now) : "";
+
+  const openTasks = useMemo(
+    () =>
+      today.tasks.items
+        .filter((task) => !CLOSED.includes(task.status))
+        .sort((left, right) => left.date.localeCompare(right.date))
+        .slice(0, TASK_LIMIT),
+    [today.tasks.items],
+  );
+
+  const overdue = dayKey
+    ? openTasks.filter((task) => task.date < dayKey).length
+    : 0;
+
+  const attendance = today.attendance;
+  const worked =
+    attendance?.checkOut ? minutesBetween(attendance.checkIn, attendance.checkOut) : null;
+  const name = today.session?.actor.displayName ?? today.session?.actor.username ?? "";
 
   return (
     <div className="page">
-      <section className="hero bento-12" aria-labelledby="workspace-title">
-        <div className="hero-copy">
-          <span className="eyebrow">Tổng quan · {today}</span>
-          <h1 id="workspace-title">Không gian làm việc</h1>
-          <p className="hero-lede">
-            Việc gì cần xử lý trước, ai đang phụ trách và tiến độ của đội trong
-            hôm nay — tất cả trên một màn.
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Trung tâm điều hành</p>
+          <h1>
+            {now ? greeting(now) : "Chào bạn"}
+            {name ? `, ${name}` : ""}
+          </h1>
+          <p className="page-lede">
+            {now ? weekdayLabel(now) : "Đang tải ngày làm việc…"} · Đây là những việc cần
+            bạn quyết định trước khi mở các phân hệ khác.
           </p>
-          <div className="hero-actions">
-            <Button asChild>
-              <Link href="/work-management/tasks">
-                Mở bảng công việc
-                <ArrowUpRight aria-hidden="true" />
-              </Link>
-            </Button>
-            <Button
-              variant="secondary"
-              loading={busy}
-              onClick={() => {
-                setBusy(true);
-                setRevision((current) => current + 1);
-              }}
-            >
-              <RefreshCw aria-hidden="true" />
-              Làm mới số liệu
-            </Button>
-          </div>
         </div>
-        <div className={styles.focus} aria-busy={loading}>
-          <span className={styles.focusLabel}>Cần xử lý trước</span>
-          <p
-            className={styles.focusValue}
-            data-tone={overdue > 0 ? "danger" : "calm"}
-          >
-            {loading ? (
-              <span
-                className={`skeleton ${styles.skeletonValue}`}
-                aria-hidden="true"
-              />
-            ) : (
-              value(summary?.overdueTasks)
-            )}
-          </p>
-          <p className={styles.focusNote}>
-            {summary
-              ? overdue > 0
-                ? "công việc đã qua hạn hoàn thành"
-                : "Không có công việc nào quá hạn"
-              : "Đang tổng hợp số liệu…"}
-          </p>
-          {overdue > 0 ? (
-            <Link
-              className={styles.focusLink}
-              href="/work-management/tasks?status=Cần làm"
-            >
-              Xem danh sách quá hạn
-            </Link>
-          ) : (
-            <span className={styles.focusQuiet}>Đội đang đúng hạn</span>
-          )}
+        <div className="page-actions">
+          <Link className="btn btn-ghost" href="/work-management/tasks">
+            Mở bảng công việc
+          </Link>
+          <Link className="btn btn-primary" href="/work-management/kanban">
+            Bảng Kanban
+          </Link>
         </div>
-      </section>
+      </header>
 
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
+      {today.sessionError ? (
+        <div className="alert alert-danger" role="alert">
+          <div className="stack gap-1">
+            <span>{today.sessionError}</span>
+            <span className="muted">
+              Phiên đăng nhập có thể đã hết hạn sau 30 phút không thao tác.
+            </span>
+          </div>
+          <Link className="btn btn-ghost btn-sm" href="/tenant-system/auth" style={{ marginLeft: "auto" }}>
+            Đăng nhập lại
+          </Link>
+        </div>
+      ) : null}
+
+      {today.feedback ? (
+        <div className="alert alert-success" role="status" aria-live="polite">
+          <span>{today.feedback}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => today.setFeedback(null)}
+            style={{ marginLeft: "auto" }}
+          >
+            Đóng
+          </button>
+        </div>
+      ) : null}
 
       <div className="bento">
-        <section className="widget bento-4" aria-labelledby="tempo-title">
-          <header className="widget-head">
-            <div className="widget-heading">
-              <span className="widget-icon" data-tone="violet">
-                <Sparkles className="size-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="widget-title" id="tempo-title">
-                  Nhịp hoàn thành
-                </h2>
-                <p className="widget-note">Tỷ lệ công việc đã đóng</p>
-              </div>
-            </div>
-          </header>
-          <div className={styles.tempoBody}>
-            <div
-              className="progress-ring"
-              role="img"
-              aria-label={
-                loading
-                  ? "Đang tải tỷ lệ hoàn thành"
-                  : `Tỷ lệ hoàn thành ${rate}%`
-              }
-            >
-              <svg width="132" height="132" viewBox="0 0 132 132">
-                <circle className="progress-track" cx="66" cy="66" r="52" />
-                <circle
-                  className="progress-value"
-                  cx="66"
-                  cy="66"
-                  r="52"
-                  stroke="var(--brand-600)"
-                  strokeDasharray={circumference}
-                  strokeDashoffset={circumference * (1 - rate / 100)}
-                />
-              </svg>
-              <span className="progress-center">
-                <strong>{loading ? "…" : `${rate}%`}</strong>
-                <span>hoàn thành</span>
-              </span>
-            </div>
-            <dl className={styles.tempoLegend}>
-              <div>
-                <dt>Đã xong</dt>
-                <dd>{loading ? "…" : value(summary?.completedTasks)}</dd>
-              </div>
-              <div>
-                <dt>Tổng việc</dt>
-                <dd>{loading ? "…" : value(summary?.totalTasks)}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
-
-        <section className="widget bento-8" aria-labelledby="watch-title">
-          <header className="widget-head">
-            <div className="widget-heading">
-              <span className="widget-icon">
-                <ListChecks className="size-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="widget-title" id="watch-title">
-                  Việc cần quan tâm
-                </h2>
-                <p className="widget-note">
-                  {loading
-                    ? "Đang tải…"
-                    : summary?.tasks.length
-                      ? `${summary.tasks.length} việc còn mở`
-                      : "Chưa có việc nào"}
-                </p>
-              </div>
-            </div>
-            <Link className="widget-link" href="/work-management/tasks">
-              Tất cả công việc
-            </Link>
-          </header>
-          {loading ? (
-            <div className={styles.list} aria-hidden="true">
-              {[0, 1, 2].map((row) => (
-                <div className={styles.row} key={row}>
-                  <span className={`skeleton ${styles.skeletonRow}`} />
-                </div>
-              ))}
-            </div>
-          ) : summary?.tasks.length ? (
-            <ul className={styles.list}>
-              {summary.tasks.map((task) => (
-                <li key={task.id}>
-                  <Link
-                    href={
-                      "/work-management/tasks?q=" +
-                      encodeURIComponent(task.name)
-                    }
-                    className={styles.row}
-                  >
-                    <span className={styles.rowMain}>{task.name}</span>
-                    <span className={styles.rowMeta}>
-                      {task.assignee || "Chưa phân công"}
-                    </span>
-                    <span className={styles.rowDate}>{task.date}</span>
-                    <span
-                      className={styles.tone}
-                      data-tone={statusTone[task.status] ?? "neutral"}
-                    >
-                      {task.status}
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className={styles.blank}>
-              <p>Chưa có công việc đang mở.</p>
-              <Button variant="secondary" size="sm" onClick={openCreate}>
-                Tạo công việc đầu tiên
-              </Button>
-            </div>
-          )}
-        </section>
-
-        <section className="widget bento-5" aria-labelledby="pins-title">
-          <header className="widget-head">
-            <div className="widget-heading">
-              <span className="widget-icon" data-tone="cyan">
-                <Pin className="size-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="widget-title" id="pins-title">
-                  Ghim của tôi
-                </h2>
-                <p className="widget-note">Lối tắt dùng hằng ngày</p>
-              </div>
-            </div>
-            <Button size="sm" variant="ghost" onClick={openCreate}>
-              Thêm
-            </Button>
-          </header>
-          {pins.length ? (
-            <ul className={styles.list}>
-              {pins.map((record) => (
-                <li className={styles.row} key={record.id}>
-                  <a
-                    className={styles.rowMain}
-                    href={record.fields.url || "#"}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {record.name}
-                  </a>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await client.remove(record);
-                        recordsChanged();
-                      } catch (e) {
-                        setError(
-                          e instanceof Error ? e.message : "Không thể bỏ ghim",
-                        );
-                      }
-                    }}
-                  >
-                    Bỏ ghim
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className={styles.blank}>
-              <p>Chưa ghim đường dẫn nào.</p>
-              <Button variant="secondary" size="sm" onClick={openCreate}>
-                Ghim liên kết
-              </Button>
-            </div>
-          )}
-        </section>
-
-        <section className="widget bento-7" aria-labelledby="signals-title">
-          <header className="widget-head">
-            <div className="widget-heading">
-              <span className="widget-icon" data-tone="rose">
-                <CircleAlert className="size-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="widget-title" id="signals-title">
-                  Tín hiệu trong ngày
-                </h2>
-                <p className="widget-note">
-                  Ba con số quyết định buổi sáng của bạn
-                </p>
-              </div>
-            </div>
-          </header>
-          <dl className={styles.signals}>
-            <div className={styles.signal}>
-              <dt>
-                <ListChecks className="size-3.5" aria-hidden="true" />
-                Đang mở
-              </dt>
-              <dd>
-                <Link href="/work-management/tasks">
-                  {loading ? (
-                    <span
-                      className={`skeleton ${styles.skeletonInline}`}
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    value(summary ? openTasks : undefined)
-                  )}
-                </Link>
-              </dd>
-            </div>
-            <div className={styles.signal}>
-              <dt>
-                <Workflow className="size-3.5" aria-hidden="true" />
-                Đề xuất chờ duyệt
-              </dt>
-              <dd>
-                <Link href="/work-management/requests">
-                  {loading ? (
-                    <span
-                      className={`skeleton ${styles.skeletonInline}`}
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    value(summary?.pendingRequests)
-                  )}
-                </Link>
-              </dd>
-            </div>
-            <div className={styles.signal}>
-              <dt>
-                <CalendarDays className="size-3.5" aria-hidden="true" />
-                Lịch hôm nay
-              </dt>
-              <dd>
-                <Link href="/work-management/calendar">
-                  {loading ? (
-                    <span
-                      className={`skeleton ${styles.skeletonInline}`}
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    value(summary?.todayEvents)
-                  )}
-                </Link>
-              </dd>
-            </div>
-            <div className={styles.signal}>
-              <dt>
-                <FolderKanban className="size-3.5" aria-hidden="true" />
-                Dự án đang chạy
-              </dt>
-              <dd>
-                <Link href="/work-management/projects">
-                  {loading ? (
-                    <span
-                      className={`skeleton ${styles.skeletonInline}`}
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    value(summary?.projects)
-                  )}
-                </Link>
-              </dd>
-            </div>
-          </dl>
-        </section>
-
-        <section className="widget bento-12" aria-labelledby="start-title">
-          <header className="widget-head">
-            <div className="widget-heading">
-              <span className="widget-icon">
-                <Compass className="size-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="widget-title" id="start-title">
-                  Bắt đầu trong 3 bước
-                </h2>
-                <p className="widget-note">Lộ trình cho người mới</p>
-              </div>
-            </div>
-          </header>
+        <section className="widget bento-8" aria-labelledby="widget-tasks">
+          <WidgetHead
+            id="widget-tasks"
+            title="Việc của tôi"
+            note={
+              dayKey
+                ? `${openTasks.length} việc đang mở · ${overdue} quá hạn`
+                : "Đang tải…"
+            }
+          />
           <div className="widget-body">
-            <ol className="onboard-list">
-              {steps.map((step, index) => (
-                <li className="onboard-step" key={step.title}>
-                  <span className="onboard-marker" aria-hidden="true">
-                    {index + 1}
-                  </span>
-                  <div className="onboard-body">
-                    <strong>{step.title}</strong>
-                    <p>{step.body}</p>
-                    <Link href={step.href}>{step.action}</Link>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            {today.loading ? (
+              <Lines rows={4} />
+            ) : today.issues.tasks ? (
+              <div className="error-state">
+                <span className="empty-title">Không tải được công việc</span>
+                <p className="empty-body">{today.issues.tasks}</p>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={today.reload}>
+                  Thử lại
+                </button>
+              </div>
+            ) : openTasks.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-title">Không có việc nào đang mở</span>
+                <p className="empty-body">
+                  Khi được giao việc, công việc gần hạn nhất sẽ xuất hiện ở đây kèm trạng
+                  thái và người kiểm tra.
+                </p>
+                <Link className="btn btn-ghost btn-sm" href="/work-management/tasks">
+                  Xem toàn bộ công việc
+                </Link>
+              </div>
+            ) : (
+              <ul className="list">
+                {openTasks.map((task) => (
+                  <li key={task.id}>
+                    <Link className="list-row" href="/work-management/tasks">
+                      <div className="list-main">
+                        <strong>{task.name}</strong>
+                        <span className="list-meta">
+                          {task.code} · Hạn {formatDate(task.date)}
+                          {task.scope ? ` · ${task.scope}` : ""}
+                        </span>
+                      </div>
+                      <span className={TASK_STATUS_TONE[task.status] ?? "badge"}>
+                        <span className="dot" />
+                        {task.status}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          <footer className="widget-foot">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => window.dispatchEvent(new Event("oneops:tour"))}
-            >
-              Xem hướng dẫn 4 bước
-            </Button>
-            <span className={styles.footNote}>Mở lại bất cứ lúc nào</span>
-          </footer>
+          <div className="widget-foot">
+            <span>{today.tasks.total.toLocaleString("vi-VN")} việc được giao cho bạn</span>
+            <Link className="link" href="/work-management/tasks">
+              Xem tất cả
+            </Link>
+          </div>
+        </section>
+
+        <section className="widget bento-4" aria-labelledby="widget-attendance">
+          <WidgetHead
+            id="widget-attendance"
+            title="Điểm danh hôm nay"
+            note="Ghi giờ vào và giờ ra của bạn"
+          />
+          <div className="widget-body">
+            {today.loading ? (
+              <Lines rows={3} />
+            ) : today.issues.attendance ? (
+              <div className="error-state">
+                <span className="empty-title">Không tải được điểm danh</span>
+                <p className="empty-body">{today.issues.attendance}</p>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={today.reload}>
+                  Thử lại
+                </button>
+              </div>
+            ) : (
+              <div className="stack gap-2">
+                <span className="hero-priority-value tabular">
+                  {attendance ? attendance.checkIn : "--:--"}
+                </span>
+                <span className="muted">
+                  {attendance
+                    ? `Giờ vào · ${ATTENDANCE_STATUS_LABEL[attendance.status] ?? attendance.status}`
+                    : "Chưa có bản ghi điểm danh hôm nay."}
+                </span>
+                {attendance ? (
+                  <div className="row wrap gap-4">
+                    <span>
+                      Ra:{" "}
+                      <strong className="tabular">{attendance.checkOut ?? "chưa ghi"}</strong>
+                    </span>
+                    {worked !== null ? (
+                      <span>
+                        Đã làm: <strong className="tabular">{durationLabel(worked)}</strong>
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+          <div className="widget-foot">
+            <span>{now ? `Bây giờ ${nowClock(now)}` : "—"}</span>
+            {attendance && !attendance.checkOut ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={today.clockOut}
+                disabled={today.busy !== null}
+                aria-busy={today.busy === "out" ? "true" : undefined}
+              >
+                {today.busy === "out" ? "Đang ghi…" : "Chấm công ra"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={today.clockIn}
+                disabled={
+                  Boolean(attendance) ||
+                  today.busy !== null ||
+                  (today.accessReady && !today.attendanceAccess)
+                }
+                aria-busy={today.busy === "in" ? "true" : undefined}
+                title={
+                  attendance
+                    ? "Hôm nay đã có bản ghi điểm danh"
+                    : today.accessReady && !today.attendanceAccess
+                      ? "Bạn không có quyền chấm công"
+                      : "Ghi giờ vào ngay bây giờ"
+                }
+              >
+                {today.busy === "in" ? "Đang ghi…" : "Chấm công vào"}
+              </button>
+            )}
+          </div>
+        </section>
+
+        <section className="widget bento-4" aria-labelledby="widget-approvals">
+          <WidgetHead
+            id="widget-approvals"
+            title="Chờ tôi duyệt"
+            note={
+              today.issues.approvals
+                ? "Không tải được hàng đợi"
+                : `${today.approvals.total.toLocaleString("vi-VN")} đề xuất cần quyết định`
+            }
+          />
+          <div className="widget-body">
+            {today.loading ? (
+              <Lines rows={2} />
+            ) : today.issues.approvals ? (
+              <p className="muted">{today.issues.approvals}</p>
+            ) : today.approvals.items.length === 0 ? (
+              <p className="muted">
+                Không có đề xuất nào đang chờ bạn. Hàng đợi sẽ tự cập nhật khi có người
+                gửi.
+              </p>
+            ) : (
+              <ul className="list">
+                {today.approvals.items.slice(0, APPROVAL_LIMIT).map((entry) => (
+                  <li key={entry.request.id}>
+                    <Link className="list-row" href="/work-management/tickets-approvals">
+                      <div className="list-main">
+                        <strong>{entry.request.name}</strong>
+                        <span className="list-meta">
+                          {entry.request.code} · {entry.request.fields.requester ?? "—"} ·{" "}
+                          {formatDate(entry.request.date)}
+                        </span>
+                      </div>
+                      <span className="badge badge-warning">{entry.request.status}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="widget-foot">
+            <span>Bước {today.approvals.items[0]?.step.sequence ?? "—"}</span>
+            <Link className="link" href="/work-management/tickets-approvals">
+              Mở hàng đợi
+            </Link>
+          </div>
+        </section>
+
+        <section className="widget bento-4" aria-labelledby="widget-notices">
+          <WidgetHead
+            id="widget-notices"
+            title="Thông báo chưa đọc"
+            note={
+              today.issues.notices
+                ? "Không tải được thông báo"
+                : `${today.notices.total.toLocaleString("vi-VN")} thông báo mới`
+            }
+          />
+          <div className="widget-body">
+            {today.loading ? (
+              <Lines rows={2} />
+            ) : today.issues.notices ? (
+              <p className="muted">{today.issues.notices}</p>
+            ) : today.notices.items.length === 0 ? (
+              <p className="muted">Bạn đã đọc hết thông báo. Không có gì đang chờ.</p>
+            ) : (
+              <ul className="list">
+                {today.notices.items.slice(0, NOTICE_LIMIT).map((notice) => (
+                  <li key={notice.id}>
+                    <Link className="list-row" href={notice.link || "/work-management/notifications"}>
+                      <div className="list-main">
+                        <strong>{notice.title}</strong>
+                        <span className="list-meta">{formatDateTime(notice.createdAt)}</span>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="widget-foot">
+            <span>Cập nhật theo thời gian thực</span>
+            <Link className="link" href="/work-management/notifications">
+              Mở thông báo
+            </Link>
+          </div>
+        </section>
+
+        <section className="widget bento-4" aria-labelledby="widget-shortcuts">
+          <WidgetHead
+            id="widget-shortcuts"
+            title="Đi thẳng"
+            note="Các màn hình dùng nhiều nhất trong ngày"
+          />
+          <div className="widget-body">
+            <ul className="list">
+              <li>
+                <Link className="list-row" href="/hr-management/attendance">
+                  <div className="list-main">
+                    <strong>Chấm công của tôi</strong>
+                    <span className="list-meta">Xem lịch sử vào/ra theo ngày</span>
+                  </div>
+                </Link>
+              </li>
+              <li>
+                <Link className="list-row" href="/hr-management/leaves">
+                  <div className="list-main">
+                    <strong>Đơn nghỉ phép</strong>
+                    <span className="list-meta">Gửi và theo dõi đơn của bạn</span>
+                  </div>
+                </Link>
+              </li>
+              <li>
+                <Link className="list-row" href="/hr-management/explanations">
+                  <div className="list-main">
+                    <strong>Giải trình điểm danh</strong>
+                    <span className="list-meta">Bổ sung giờ khi quên chấm công</span>
+                  </div>
+                </Link>
+              </li>
+              <li>
+                <Link className="list-row" href="/work-management/calendar">
+                  <div className="list-main">
+                    <strong>Lịch làm việc</strong>
+                    <span className="list-meta">Sự kiện và mốc của tuần này</span>
+                  </div>
+                </Link>
+              </li>
+            </ul>
+          </div>
+          <div className="widget-foot">
+            <span>Phím tắt ⌘K / Ctrl K để tìm nhanh mọi màn hình</span>
+          </div>
         </section>
       </div>
 
       <p className="page-footnote">
-        {summary
-          ? `Tỷ lệ hoàn thành ${summary.completionRate}% · cập nhật ${new Date(
-              summary.updatedAt,
-            ).toLocaleTimeString("vi-VN", {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}`
-          : "Số liệu sẽ hiển thị khi tải xong."}
+        Số liệu lấy trực tiếp từ phân hệ công việc, điểm danh, phê duyệt và thông báo. Nếu
+        một khối không tải được, các khối còn lại vẫn hoạt động độc lập.
       </p>
     </div>
   );

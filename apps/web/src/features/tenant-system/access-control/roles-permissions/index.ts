@@ -1,2 +1,1 @@
-export { ModulePage } from "./components/page";
-export { definition } from "./constants";
+export { PermissionsPage } from "./components/page";

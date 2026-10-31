@@ -1,53 +1,32 @@
-export const statusLabels = {
-  OPEN: "Chưa check-out",
-  COMPLETE: "Đã đủ giờ vào/ra",
-  LOCKED: "Đã chốt",
-} as const;
+import type { AttendanceSource, AttendanceStatus } from "./types";
 
-export const sourceLabels = {
+/** Permission catalog key owned by this branch — matches `@RequirePermission`. */
+export const FEATURE_KEY = "hr-management/attendance/daily-checkin";
+
+export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 25;
+
+/** Status always reads as a word; the dot and the tone are decoration on top. */
+export const STATUS_LABEL: Record<AttendanceStatus, string> = {
+  OPEN: "Chưa ghi giờ ra",
+  COMPLETE: "Đủ giờ vào/ra",
+  LOCKED: "Đã chốt",
+};
+
+export const STATUS_TONE: Record<AttendanceStatus, string> = {
+  OPEN: "badge badge-warning",
+  COMPLETE: "badge badge-success",
+  LOCKED: "badge",
+};
+
+export const SOURCE_LABEL: Record<AttendanceSource, string> = {
   WEB: "Web",
-  MOBILE: "Di động",
+  MOBILE: "Điện thoại",
   KIOSK: "Ki-ốt",
   MANUAL: "Nhập tay",
-} as const;
+};
 
-export const statusTones = {
-  OPEN: "warning",
-  COMPLETE: "success",
-  LOCKED: "info",
-} as const;
+/** The API closes open records at this local time; the note in the footer says so. */
+export const AUTO_CLOSE_TIME = "23:59";
 
-export const definition = {
-  id: "hr-management/attendance",
-  icon: 7,
-  label: "Chấm công hằng ngày",
-  title: "Chấm công hằng ngày",
-  singular: "lượt chấm công",
-  dateLabel: "Ngày làm việc",
-  personLabel: "Nhân sự",
-  tabs: [],
-  sections: [],
-  statuses: ["OPEN", "COMPLETE", "LOCKED"],
-  fields: [],
-  navigation: {
-    title: "Chấm công",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      { label: "Tất cả", href: "/hr-management/attendance" },
-      {
-        label: "Chưa check-out",
-        href: "/hr-management/attendance?status=OPEN&section=Chưa check-out",
-      },
-      {
-        label: "Đã đủ giờ",
-        href: "/hr-management/attendance?status=COMPLETE&section=Đã đủ giờ",
-      },
-      {
-        label: "Đã chốt",
-        href: "/hr-management/attendance?status=LOCKED&section=Đã chốt",
-      },
-    ],
-  },
-} as const;
+export const EXPORT_FILE_PREFIX = "cham-cong";

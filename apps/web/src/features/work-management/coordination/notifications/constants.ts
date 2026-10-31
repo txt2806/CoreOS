@@ -1,36 +1,31 @@
-type Field = {
-  key: string;
-  label: string;
-  type: string;
-  options?: readonly string[];
+import type { NotificationSource } from "./types";
+
+/** Key of this branch in the permission catalog. */
+export const FEATURE_KEY = "work-management/coordination/notifications";
+
+export const PAGE_SIZES = [20, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 50;
+
+export const SOURCE_LABEL: Record<NotificationSource, string> = {
+  task: "Công việc",
+  comment: "Bình luận",
+  message: "Tin nhắn",
+  meeting: "Cuộc họp",
+  request: "Đề xuất",
 };
-export const definition = {
-  id: "work-management/notifications",
-  icon: 11,
-  label: "Thông báo",
-  title: "Thông báo",
-  singular: "thông báo",
-  dateLabel: "Thời gian",
-  personLabel: "Người nhận",
-  tabs: [],
-  sections: [],
-  statuses: [],
-  fields: [],
-  navigation: {
-    title: "Thông báo",
-    collapsed: false,
-    defaultSection: "Tất cả",
-    allSection: "Tất cả",
-    items: [
-      {
-        label: "Tất cả",
-        href: "/work-management/notifications",
-      },
-      {
-        label: "Chưa đọc",
-        href: "/work-management/notifications?unread=true&section=Chưa đọc",
-      },
-    ],
-  },
-} as const;
-export const fields: readonly Field[] = definition.fields;
+
+export const SOURCE_TONE: Record<NotificationSource, string> = {
+  task: "badge badge-info",
+  comment: "badge badge-accent",
+  message: "badge",
+  meeting: "badge badge-info",
+  request: "badge badge-warning",
+};
+
+/**
+ * Used only when the SSE stream (`GET /notifications/stream`) cannot be opened —
+ * the stream pushes new and deleted notices to the tab.
+ */
+export const POLL_INTERVAL_MS = 60_000;
+
+export const BODY_EXCERPT = 160;

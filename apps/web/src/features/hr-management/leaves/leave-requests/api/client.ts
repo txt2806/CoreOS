@@ -1,75 +1,190 @@
-import type { z } from "zod";
-import {
-  leaveInput,
-  leaveSchema,
-  listSchema,
-  type LeaveDto,
-  type LeaveInput,
-} from "@/features/hr-management/leaves/leave-requests/types";
+import type {
+  LeaveInput,
+  LeavePatch,
+  LeaveRequest,
+  LeaveStatus,
+  LeaveQuota,
+  PageResult,
+  PermissionsMe,
+  PermissionSnapshot,
+  Session,
+} from "../types";
 
+/**
+ * Every call goes through the same-origin proxy, so the HttpOnly session cookie
+ * travels with the request and no CORS preflight is involved.
+ */
 export class ApiError extends Error {
+  readonly status: number;
+  readonly issues: { path: string; message: string }[];
+
   constructor(
-    public status: number,
+    status: number,
     message: string,
+    issues: { path: string; message: string }[] = [],
   ) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.issues = issues;
   }
 }
 
-async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {},
-  schema?: z.ZodType<T>,
-): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-    cache: "no-store",
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok)
-    throw new ApiError(
-      response.status,
-      typeof body?.message === "string"
-        ? body.message
-        : "Không thể kết nối API. Vui lòng thử lại.",
-    );
-  return schema ? schema.parse(body) : (body as T);
+interface ErrorBody {
+  message?: string | string[];
+  issues?: { path?: string; message?: string }[];
 }
 
-export const client = {
-  list: (params: Record<string, string>, signal?: AbortSignal) => {
-    const query = new URLSearchParams({ pageSize: "100", ...params });
-    return apiRequest(`/leave-requests?${query}`, { signal }, listSchema);
-  },
-  create: (input: LeaveInput) =>
-    apiRequest(
-      "/leave-requests",
-      { method: "POST", body: JSON.stringify(leaveInput.parse(input)) },
-      leaveSchema,
-    ),
-  update: (
-    record: LeaveDto,
-    patch: {
-      leaveType?: string;
-      fromDate?: string;
-      toDate?: string;
-      reason?: string;
-    },
-  ) =>
-    apiRequest(
-      `/leave-requests/${record.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ ...patch, version: record.version }),
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1${path}`, {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
       },
-      leaveSchema,
-    ),
-  cancel: (record: LeaveDto) =>
-    apiRequest(
-      `/leave-requests/${record.id}/cancel`,
-      { method: "POST", body: JSON.stringify({ version: record.version }) },
-      leaveSchema,
-    ),
-};
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      "Mất kết nối tới máy chủ. Kiểm tra đường truyền rồi thử lại.",
+    );
+  }
+
+  if (response.status === 204) return undefined as T;
+
+  const text = await response.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = (body ?? {}) as ErrorBody;
+    const message = Array.isArray(error.message)
+      ? error.message.join(" ")
+      : (error.message ?? "Yêu cầu không thực hiện được.");
+    throw new ApiError(
+      response.status,
+      message,
+      (error.issues ?? []).map((issue) => ({
+        path: issue.path ?? "",
+        message: issue.message ?? "",
+      })),
+    );
+  }
+
+  return body as T;
+}
+
+export interface LeaveListQuery {
+  page: number;
+  pageSize: number;
+  q?: string;
+  status?: LeaveStatus | "";
+  leaveType?: string;
+}
+
+export function listLeaves(query: LeaveListQuery) {
+  const search = new URLSearchParams({
+    page: String(query.page),
+    pageSize: String(query.pageSize),
+  });
+  if (query.q?.trim()) search.set("q", query.q.trim());
+  if (query.status) search.set("status", query.status);
+  if (query.leaveType) search.set("leaveType", query.leaveType);
+  return request<PageResult<LeaveRequest>>(`/leave-requests?${search.toString()}`);
+}
+
+/** One cheap probe per status keeps the metric strip truthful without loading rows. */
+export function leaveTotal(status: LeaveStatus) {
+  const search = new URLSearchParams({ page: "1", pageSize: "1", status });
+  return request<PageResult<LeaveRequest>>(`/leave-requests?${search.toString()}`).then(
+    (result) => result.total,
+  );
+}
+
+export function createLeave(input: LeaveInput) {
+  return request<LeaveRequest>("/leave-requests", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateLeave(id: string, input: LeavePatch) {
+  return request<LeaveRequest>(`/leave-requests/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export function cancelLeave(id: string, version: number) {
+  return request<LeaveRequest>(`/leave-requests/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ version }),
+  });
+}
+
+export function permissionsMe() {
+  return request<PermissionsMe>("/permissions/me");
+}
+
+export function actionsOf(body: PermissionsMe, featureKey: string): string[] {
+  return body.items.find((item) => item.featureKey === featureKey)?.actions ?? [];
+}
+
+export function snapshotOf(body: PermissionsMe, featureKey: string): PermissionSnapshot {
+  return {
+    role: body.role,
+    isSystemAdmin: body.isSystemAdmin,
+    actions: actionsOf(body, featureKey),
+  };
+}
+
+export function session() {
+  return request<Session>("/auth/session");
+}
+
+/**
+ * The annual allowance lives in the work-policy feature (`/work-policies/quotas`).
+ * Employees hold no permission on that branch, so the caller must expect a 403
+ * and keep the quota context hidden instead of inventing a number.
+ */
+export function annualQuota(year: number) {
+  const search = new URLSearchParams({
+    year: String(year),
+    page: "1",
+    pageSize: "1",
+  });
+  return request<PageResult<LeaveQuota>>(`/work-policies/quotas?${search.toString()}`).then(
+    (result) => result.items[0] ?? null,
+  );
+}
+
+/**
+ * Approved days already spent by one employee in a window. The endpoint pages at
+ * 100 rows, so a long service history is read in bounded batches.
+ */
+export async function usedLeaveDays(
+  employeeId: string,
+  from: string,
+  to: string,
+): Promise<number> {
+  let sum = 0;
+  let page = 1;
+  for (; page <= 5; page += 1) {
+    const search = new URLSearchParams({
+      status: "APPROVED",
+      employeeId,
+      from,
+      to,
+      page: String(page),
+      pageSize: "100",
+    });
+    const result = await request<PageResult<LeaveRequest>>(
+      `/leave-requests?${search.toString()}`,
+    );
+    for (const item of result.items) sum += item.days;
+    if (result.items.length === 0 || page * result.pageSize >= result.total) break;
+  }
+  return sum;
+}

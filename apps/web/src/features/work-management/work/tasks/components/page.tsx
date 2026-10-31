@@ -1,455 +1,574 @@
 "use client";
-import { useState } from "react";
-import { useSearchParams } from "next/navigation";
-import {
-  KanbanBoard,
-  type BoardTask,
-} from "@/features/work-management/work/kanban";
-import type { RecordDto } from "@/features/work-management/work/tasks/types";
-import {
-  definition,
-  isLate,
-  officeToday,
-  reasonRequiredCodes,
-  statusTone,
-  TERMINAL_STATUSES,
-} from "@/features/work-management/work/tasks/constants";
-import { client } from "@/features/work-management/work/tasks/api/client";
-import { workflow } from "@/features/work-management/work/tasks/api/workflow";
-import {
-  useModuleRecords,
-  recordsChanged,
-} from "@/features/work-management/work/tasks/hooks/use-records";
-import { useAllowed } from "@/features/work-management/work/tasks/hooks/use-allowed";
-import { useBlockers } from "@/features/work-management/work/tasks/hooks/use-blockers";
-import {
-  Modal,
-  useWorkspace,
-} from "@/features/work-management/work/tasks/components/primitives/workspace";
-import { Button } from "@/features/work-management/work/tasks/components/primitives/button";
-import {
-  Input,
-  Select,
-} from "@/features/work-management/work/tasks/components/primitives/forms";
-import { Badge } from "@/features/work-management/work/tasks/components/primitives/foundations";
-import { RecordForm } from "@/features/work-management/work/tasks/components/record-form";
-import { TaskDetail } from "@/features/work-management/work/tasks/components/task-detail";
-import styles from "@/features/work-management/work/tasks/components/styles.module.css";
 
-const searchable = (record: RecordDto) =>
-  [
-    record.code,
-    record.name,
-    record.assignee,
-    record.reviewer,
-    record.note,
-    record.fields.project,
-    record.fields.tags,
-    record.fields.priority,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLocaleLowerCase("vi");
+import { useEffect, useMemo, useState } from "react";
+import { KanbanBoard, type BoardMove, type BoardTask } from "../../kanban";
+import { allowedMap, transitionTask } from "../api/client";
+import { EXPORT_FILE_PREFIX } from "../constants";
+import { downloadCsv, formatDate, today } from "../format";
+import { useTasks, type Feedback } from "../hooks/use-tasks";
+import { TASK_STATUSES, type Task } from "../types";
+import { CreateTaskDialog } from "./create-dialog";
+import { TaskDetailSheet } from "./detail-sheet";
+import {
+  CloseGlyph,
+  Confirm,
+  DownloadGlyph,
+  Pagination,
+  PlusGlyph,
+  SearchGlyph,
+} from "./primitives";
+import {
+  ALL_COLUMNS,
+  COLUMN_LABELS,
+  OPTIONAL_COLUMNS,
+  TaskTable,
+  nextSort,
+  sortTasks,
+  type ColumnKey,
+  type SortState,
+} from "./table";
 
-export function ModulePage({
-  initialView = "board",
-}: {
-  initialView?: "list" | "board";
-}) {
-  const params = useSearchParams();
-  const { openCreate, notify } = useWorkspace();
-  const { records, loading, error, reload } = useModuleRecords();
-  const allowed = useAllowed(records.map((record) => record.id));
-  const blockers = useBlockers(records.map((record) => record.id));
-  const [query, setQuery] = useState(params.get("q") || "");
-  const [status, setStatus] = useState("");
-  const [view, setView] = useState<"list" | "board">(initialView);
-  const [focusId, setFocusId] = useState<string | null>(params.get("focus"));
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const today = officeToday();
-  const effectiveStatus =
-    status === "all" ? "" : status || params.get("status") || "";
-  const needle = query.trim().toLocaleLowerCase("vi");
-  const filtered = records.filter(
-    (record) =>
-      (!effectiveStatus || record.status === effectiveStatus) &&
-      (!needle || searchable(record).includes(needle)),
-  );
-  const detail = focusId
-    ? (records.find((record) => record.id === focusId) ?? null)
-    : null;
-  const editing = editingId
-    ? (records.find((record) => record.id === editingId) ?? null)
-    : null;
-  const deleting = deletingId
-    ? (records.find((record) => record.id === deletingId) ?? null)
-    : null;
-  const open = records.filter(
-    (record) => !TERMINAL_STATUSES.includes(record.status),
-  );
-  const late = records.filter((record) => isLate(record, today));
-  const completed = records.filter((record) => record.status === "Hoàn thành");
+const ALERT_TONE: Record<Feedback["tone"], string> = {
+  success: "alert alert-success",
+  error: "alert alert-danger",
+  warning: "alert alert-warning",
+  info: "alert",
+};
 
-  const boardTasks: BoardTask[] = filtered.map((record) => {
-    const entry = allowed.map.get(record.id);
-    return {
-      id: record.id,
-      code: record.code,
-      name: record.name,
-      status: record.status,
-      date: record.date,
-      assignee: record.assignee,
-      reviewer: record.reviewer,
-      priority: record.fields.priority,
-      project: record.fields.project,
-      available: (entry?.allowed ?? []).map((move) => move.to),
-      locked: Boolean(entry?.pendingProposal),
-      blocked: blockers.map.get(record.id)?.open ?? 0,
-    };
-  });
+function share(value: number, total: number): string {
+  if (!total) return "chưa có dữ liệu";
+  return `${Math.round((value / total) * 100)}% trên tổng`;
+}
 
-  async function move(taskId: string, to: string) {
-    if (pending) return;
-    const record = records.find((item) => item.id === taskId);
-    const target = allowed.map
-      .get(taskId)
-      ?.allowed.find((item) => item.to === to);
-    if (!record || !target) {
-      notify("Không thể chuyển công việc sang trạng thái này.");
-      return;
-    }
-    if (reasonRequiredCodes.includes(target.code)) {
-      setFocusId(taskId);
-      notify(`Chuyển sang “${to}” cần nhập lý do trong trang chi tiết.`);
-      return;
-    }
-    setPending(true);
-    setActionError("");
-    try {
-      await workflow.transition(taskId, {
-        toStatus: to,
-        version: record.version,
+export function TasksPage({ initialView = "table" }: { initialView?: "table" | "board" }) {
+  const tasks = useTasks();
+  const [view, setView] = useState<"table" | "board">(initialView);
+  const [sort, setSort] = useState<SortState>({ key: "date", dir: "asc" });
+  const [hidden, setHidden] = useState<ColumnKey[]>(["reviewer"]);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [askBulk, setAskBulk] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [moves, setMoves] = useState<Record<string, BoardMove[]>>({});
+  const [pendingMove, setPendingMove] = useState<string | null>(null);
+  const [optimistic, setOptimistic] = useState<Record<string, string>>({});
+
+  const rows = useMemo(() => sortTasks(tasks.data.items, sort), [tasks.data.items, sort]);
+
+  /* The reload that follows a move carries the real status; drop the guess. */
+  useEffect(() => setOptimistic({}), [tasks.data]);
+
+  useEffect(() => {
+    if (view !== "board") return;
+    let cancelled = false;
+    allowedMap(tasks.data.items.map((task) => task.id))
+      .then((map) => {
+        if (!cancelled) setMoves(map);
+      })
+      .catch(() => {
+        /* Without the rules the board stays read-only instead of guessing. */
+        if (!cancelled) setMoves({});
       });
-      recordsChanged();
-      allowed.reload();
-      blockers.reload();
-      notify(`Đã chuyển “${record.code}” sang ${to}.`);
-    } catch (cause) {
-      setActionError(
-        cause instanceof Error ? cause.message : "Không thể chuyển trạng thái",
-      );
-    } finally {
-      setPending(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [view, tasks.data.items]);
 
-  function exportCsv() {
-    const cell = (value: string) =>
-      '"' +
-      (/^[=+@-]/.test(value) ? "'" : "") +
-      value.replaceAll('"', '""') +
-      '"';
-    const csv = [
-      [
-        "Mã",
-        "Tiêu đề",
-        "Trạng thái",
-        definition.dateLabel,
-        definition.personLabel,
-        definition.reviewerLabel,
-      ],
-      ...filtered.map((record) => [
-        record.code,
-        record.name,
-        record.status,
-        record.date,
-        record.assignee,
-        record.reviewer,
-      ]),
-    ]
-      .map((row) => row.map(cell).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
+  useEffect(() => {
+    if (!columnsOpen) return;
+    const close = () => setColumnsOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setColumnsOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [columnsOpen]);
+
+  const changeView = (next: "table" | "board") => {
+    setView(next);
+    if (next === "board" && tasks.query.pageSize < 100)
+      tasks.patchQuery({ page: 1, pageSize: 100 });
+  };
+
+  const toggleColumn = (key: ColumnKey) => {
+    setHidden((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "tasks.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
+  };
+
+  const toggleRow = (id: string) => {
+    setSelected((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  };
+
+  const toggleAll = () => {
+    setSelected((current) =>
+      current.length === rows.length ? [] : rows.map((task) => task.id),
+    );
+  };
+
+  const selectedTasks = rows.filter((task) => selected.includes(task.id));
+
+  const exportRows = (list: Task[]) => {
+    const header = [
+      "Mã",
+      "Tên",
+      "Phạm vi",
+      "Trạng thái",
+      "Ưu tiên",
+      "Phụ trách",
+      "Kiểm tra",
+      "Hạn",
+      "Tiến độ",
+      "Dự án",
+      "Nhãn",
+      "Cập nhật",
+    ];
+    const body = list.map((task) => [
+      task.code,
+      task.name,
+      task.scope,
+      task.status,
+      task.fields.priority ?? "",
+      task.assignee,
+      task.reviewer,
+      formatDate(task.date),
+      typeof task.fields.progress === "number" ? `${task.fields.progress}%` : "",
+      task.fields.project ?? "",
+      task.fields.tags ?? "",
+      formatDate(task.updatedAt),
+    ]);
+    downloadCsv(`${EXPORT_FILE_PREFIX}-${today()}.csv`, [header, ...body]);
+    tasks.setFeedback({
+      tone: "info",
+      message: `Đã xuất ${list.length} dòng ra tệp CSV.`,
+    });
+  };
+
+  const move = async (task: BoardTask, to: string) => {
+    setPendingMove(task.id);
+    setOptimistic((current) => ({ ...current, [task.id]: to }));
+    try {
+      await transitionTask(task.id, { toStatus: to, version: task.version });
+      tasks.setFeedback({
+        tone: "success",
+        message: `${task.code} đã chuyển sang “${to}”.`,
+      });
+      tasks.reload();
+    } catch (caught) {
+      setOptimistic((current) => {
+        const next = { ...current };
+        delete next[task.id];
+        return next;
+      });
+      tasks.setFeedback({
+        tone: "error",
+        message: caught instanceof Error ? caught.message : "Chưa chuyển được trạng thái.",
+        hint: "Thẻ đã trở về trạng thái trước đó. Mở chi tiết để xem bước nào được phép.",
+      });
+    } finally {
+      setPendingMove(null);
+    }
+  };
+
+  const confirmBulk = async () => {
+    setBulkBusy(true);
+    await tasks.bulkRemove(selectedTasks);
+    setSelected([]);
+    setAskBulk(false);
+    setBulkBusy(false);
+  };
+
+  const detail = openId ? (tasks.data.items.find((task) => task.id === openId) ?? null) : null;
+  const total = tasks.data.total;
+  const sums = Object.values(tasks.totals);
+  const all = sums.reduce((sum, value) => sum + value, 0);
+  const forbidden = tasks.error?.status === 403;
 
   return (
-    <div className={styles.root}>
-      <div className="module-view">
-        <section className="records-panel">
-          <header className="page-header">
-            <div>
-              <span className="eyebrow">Công việc · Quy trình</span>
-              <h1>{definition.title}</h1>
-              <p>
-                Phân công rõ ràng, chuyển trạng thái theo quy trình và lưu lại
-                lịch sử xử lý.
-              </p>
-            </div>
-            <div className="page-actions">
-              <Button variant="secondary" onClick={exportCsv}>
-                Xuất CSV
-              </Button>
-              <Button onClick={openCreate}>Tạo mới</Button>
-            </div>
-          </header>
+    <div className="page">
+      <header className="page-header">
+        <div className="stack gap-2">
+          <p className="page-eyebrow">Điều phối công việc</p>
+          <h1>Công việc</h1>
+          <p className="page-lede">
+            Theo dõi việc đang mở, ai phụ trách và việc nào sắp trễ. Trạng thái chỉ đổi
+            qua luồng công việc để giữ lịch sử chuyển bước.
+          </p>
+        </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => exportRows(rows)}
+            disabled={rows.length === 0}
+            title="Xuất các dòng đang hiển thị ra CSV"
+          >
+            <DownloadGlyph /> Xuất CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setCreating(true)}
+            disabled={!tasks.can("create")}
+            title={
+              tasks.can("create")
+                ? "Tạo công việc mới"
+                : "Bạn không có quyền tạo công việc"
+            }
+          >
+            <PlusGlyph /> Tạo công việc
+          </button>
+        </div>
+      </header>
 
-          <div className={styles.toolbar}>
-            <Input
-              aria-label="Tìm kiếm công việc"
-              placeholder={"Tìm " + definition.singular + "…"}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <Select
-              aria-label="Lọc theo trạng thái"
-              value={effectiveStatus}
-              onChange={(event) => setStatus(event.target.value || "all")}
-            >
-              <option value="">Tất cả trạng thái</option>
-              {definition.statuses.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </Select>
-            <div className={styles.toolbarRight}>
-              <div
-                className="flex gap-2"
-                role="group"
-                aria-label="Kiểu hiển thị"
+      {sums.length > 0 ? (
+        <section className="metric-strip" aria-label="Số lượng công việc theo trạng thái">
+          <div className="metric">
+            <span className="metric-value tabular">{tasks.totals.todo ?? 0}</span>
+            <span className="metric-label">Cần làm</span>
+            <span className="metric-note">{share(tasks.totals.todo ?? 0, all)}</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{tasks.totals.doing ?? 0}</span>
+            <span className="metric-label">Đang làm</span>
+            <span className="metric-note">{share(tasks.totals.doing ?? 0, all)}</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{tasks.totals.review ?? 0}</span>
+            <span className="metric-label">Chờ kiểm tra</span>
+            <span className="metric-note">cần người nghiệm thu</span>
+          </div>
+          <div className="metric">
+            <span className="metric-value tabular">{tasks.totals.done ?? 0}</span>
+            <span className="metric-label">Hoàn thành</span>
+            <span className="metric-note">{share(tasks.totals.done ?? 0, all)}</span>
+          </div>
+        </section>
+      ) : null}
+
+      {tasks.feedback ? (
+        <div className={ALERT_TONE[tasks.feedback.tone]} role="status" aria-live="polite">
+          <div className="stack gap-1">
+            <span>{tasks.feedback.message}</span>
+            {tasks.feedback.hint ? (
+              <span className="muted">{tasks.feedback.hint}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => tasks.setFeedback(null)}
+            aria-label="Đóng thông báo"
+            style={{ marginLeft: "auto" }}
+          >
+            <CloseGlyph />
+          </button>
+        </div>
+      ) : null}
+
+      <div className="surface">
+        <div className="surface-head">
+          <div className="toolbar">
+            <div className="toolbar-filters">
+              <div className="search">
+                <SearchGlyph />
+                <input
+                  id="task-search"
+                  className="input"
+                  type="search"
+                  value={tasks.query.q ?? ""}
+                  autoComplete="off"
+                  placeholder="Tìm theo mã, tên, phạm vi…"
+                  aria-label="Tìm công việc"
+                  onChange={(event) =>
+                    tasks.patchQuery({ q: event.target.value, page: 1 })
+                  }
+                />
+                {tasks.query.q ? (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => tasks.patchQuery({ q: "", page: 1 })}
+                    aria-label="Xoá từ khoá tìm kiếm"
+                  >
+                    <CloseGlyph />
+                  </button>
+                ) : null}
+              </div>
+
+              <select
+                className="select"
+                value={tasks.query.status ?? ""}
+                aria-label="Lọc theo trạng thái"
+                onChange={(event) =>
+                  tasks.patchQuery({
+                    status: event.target.value as Task["status"] | "",
+                    page: 1,
+                  })
+                }
+                style={{ width: 176 }}
               >
-                <Button
-                  variant={view === "board" ? "primary" : "secondary"}
-                  aria-pressed={view === "board"}
-                  onClick={() => setView("board")}
+                <option value="">Mọi trạng thái</option>
+                {TASK_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+
+              <div className="popover-anchor">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-expanded={columnsOpen}
+                  aria-haspopup="true"
+                  onClick={() => setColumnsOpen((open) => !open)}
+                >
+                  Cột hiển thị
+                </button>
+                {columnsOpen ? (
+                  <div className="menu" role="group" aria-label="Chọn cột hiển thị">
+                    {OPTIONAL_COLUMNS.map((key) => (
+                      <label key={key} className="menu-item">
+                        <input
+                          type="checkbox"
+                          checked={!hidden.includes(key)}
+                          onChange={() => toggleColumn(key)}
+                        />
+                        {COLUMN_LABELS[key]}
+                      </label>
+                    ))}
+                    <button
+                      type="button"
+                      className="menu-item"
+                      onClick={() => setHidden([])}
+                    >
+                      Hiện tất cả {ALL_COLUMNS.length} cột
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="toolbar-actions">
+              <span className="result-count">
+                {total.toLocaleString("vi-VN")} công việc
+                {tasks.filtersActive ? ` · ${rows.length} dòng khớp` : ""}
+              </span>
+              <div className="segmented" role="group" aria-label="Kiểu hiển thị">
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={view === "table"}
+                  onClick={() => changeView("table")}
                 >
                   Bảng
-                </Button>
-                <Button
-                  variant={view === "list" ? "primary" : "secondary"}
-                  aria-pressed={view === "list"}
-                  onClick={() => setView("list")}
+                </button>
+                <button
+                  type="button"
+                  className="segment"
+                  aria-pressed={view === "board"}
+                  onClick={() => changeView("board")}
                 >
-                  Danh sách
-                </Button>
+                  Kanban
+                </button>
               </div>
-              <Button
-                variant="ghost"
-                loading={loading}
-                onClick={() => {
-                  reload();
-                  allowed.reload();
-                  blockers.reload();
-                }}
-              >
-                Làm mới
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                {filtered.length} mục
-              </span>
             </div>
           </div>
 
-          <div className={styles.stats}>
-            <Badge variant="neutral" dot>
-              {open.length} đang mở
-            </Badge>
-            <Badge variant={late.length ? "danger" : "neutral"} dot>
-              {late.length} quá hạn
-            </Badge>
-            <Badge variant="success" dot>
-              {completed.length} hoàn thành
-            </Badge>
+          {tasks.filtersActive ? (
+            <div className="row wrap items-center gap-2" style={{ paddingTop: "var(--space-3)" }}>
+              {tasks.term ? (
+                <span className="chip" data-active="true">
+                  Từ khoá: “{tasks.term}”
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => tasks.patchQuery({ q: "", page: 1 })}
+                    aria-label="Bỏ lọc từ khoá"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              {tasks.query.status ? (
+                <span className="chip" data-active="true">
+                  Trạng thái: {tasks.query.status}
+                  <button
+                    type="button"
+                    className="chip-remove"
+                    onClick={() => tasks.patchQuery({ status: "", page: 1 })}
+                    aria-label="Bỏ lọc trạng thái"
+                  >
+                    <CloseGlyph />
+                  </button>
+                </span>
+              ) : null}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={tasks.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {selected.length > 0 ? (
+          <div className="bulk-bar" role="region" aria-label="Thao tác với dòng đã chọn">
+            <strong className="tabular">{selected.length} dòng đã chọn</strong>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => exportRows(selectedTasks)}
+            >
+              <DownloadGlyph /> Xuất đã chọn
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => setAskBulk(true)}
+              disabled={!tasks.can("delete")}
+              title={
+                tasks.can("delete")
+                  ? "Xoá các dòng đã chọn"
+                  : "Bạn không có quyền xoá công việc"
+              }
+            >
+              Xoá đã chọn
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setSelected([])}
+              style={{ marginLeft: "auto" }}
+            >
+              Bỏ chọn
+            </button>
           </div>
+        ) : null}
 
-          {(error || actionError || allowed.error) && (
-            <div role="alert" className="error">
-              {error || actionError || allowed.error}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  reload();
-                  allowed.reload();
-                }}
-              >
-                Thử lại
-              </Button>
-            </div>
-          )}
-
-          {loading ? (
-            <p role="status">Đang tải dữ liệu…</p>
-          ) : !filtered.length ? (
-            <div className="surface empty-state">
-              <h2>Chưa có {definition.singular} phù hợp</h2>
-              <p>Tạo nội dung đầu tiên hoặc thay đổi điều kiện tìm kiếm.</p>
-              <Button onClick={openCreate}>Tạo mới</Button>
-            </div>
-          ) : view === "board" ? (
-            <KanbanBoard
-              tasks={boardTasks}
-              statuses={definition.statuses}
-              pending={pending}
-              today={today}
-              onOpen={(id) => setFocusId(id)}
-              onMove={(id, to) => void move(id, to)}
-            />
-          ) : (
-            <div className={styles.scroll}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Mã</th>
-                    <th>Tiêu đề</th>
-                    <th>Trạng thái</th>
-                    <th>{definition.dateLabel}</th>
-                    <th>{definition.personLabel}</th>
-                    <th>{definition.reviewerLabel}</th>
-                    <th>Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((record) => (
-                    <tr key={record.id}>
-                      <td>{record.code}</td>
-                      <td>
-                        <button
-                          className="font-medium"
-                          onClick={() => setFocusId(record.id)}
-                        >
-                          {record.name}
-                        </button>
-                      </td>
-                      <td>
-                        <span className={styles.actions}>
-                          <Badge variant={statusTone[record.status]} dot>
-                            {record.status}
-                          </Badge>
-                          {Boolean(blockers.map.get(record.id)?.open) && (
-                            <Badge variant="warning">
-                              Chờ {blockers.map.get(record.id)?.open} việc
-                            </Badge>
-                          )}
-                        </span>
-                      </td>
-                      <td
-                        className={
-                          isLate(record, today) ? "text-destructive" : undefined
-                        }
-                      >
-                        {record.date}
-                      </td>
-                      <td>{record.assignee || "Chưa phân công"}</td>
-                      <td>{record.reviewer || "Quản lý phụ trách"}</td>
-                      <td>
-                        <div className={styles.actions}>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label={`Sửa ${record.code}`}
-                            onClick={() => setEditingId(record.id)}
-                          >
-                            Sửa
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            aria-label={`Xóa ${record.code}`}
-                            onClick={() => setDeletingId(record.id)}
-                          >
-                            Xóa
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
-
-      {detail && (
-        <TaskDetail
-          key={detail.id}
-          task={detail}
-          candidates={records.filter((record) => record.id !== detail.id)}
-          onChanged={() => {
-            allowed.reload();
-            blockers.reload();
-          }}
-          onClose={() => setFocusId(null)}
-          onEdit={() => {
-            setEditingId(detail.id);
-            setFocusId(null);
-          }}
-          onDelete={() => {
-            setDeletingId(detail.id);
-            setFocusId(null);
-          }}
-        />
-      )}
-      {editing && (
-        <Modal
-          title={"Chỉnh sửa " + definition.singular}
-          onClose={() => setEditingId(null)}
-        >
-          <RecordForm record={editing} onClose={() => setEditingId(null)} />
-        </Modal>
-      )}
-      {deleting && (
-        <Modal title="Xác nhận xóa" onClose={() => setDeletingId(null)}>
-          <div className="form-body">
-            <p>
-              Bạn muốn xóa “{deleting.name}”? Lịch sử chuyển trạng thái và trao
-              đổi của công việc sẽ không còn hiển thị.
+        {forbidden ? (
+          <div className="forbidden-state" role="alert">
+            <span className="empty-title">Bạn chưa được cấp quyền xem công việc</span>
+            <p className="empty-body">
+              Yêu cầu quản trị hệ thống cấp quyền “Xem” cho phân hệ Công việc rồi tải lại
+              trang.
             </p>
-            {actionError && (
-              <p className="error" role="alert">
-                {actionError}
-              </p>
+            <button type="button" className="btn btn-ghost" onClick={tasks.reload}>
+              Tải lại
+            </button>
+          </div>
+        ) : tasks.error ? (
+          <div className="error-state" role="alert">
+            <span className="empty-title">Không tải được danh sách công việc</span>
+            <p className="empty-body">{tasks.error.message}</p>
+            <button type="button" className="btn btn-primary" onClick={tasks.reload}>
+              Thử lại
+            </button>
+          </div>
+        ) : !tasks.loading && rows.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-title">
+              {tasks.filtersActive
+                ? "Không có công việc nào khớp bộ lọc"
+                : "Chưa có công việc nào"}
+            </span>
+            <p className="empty-body">
+              {tasks.filtersActive
+                ? "Thử bỏ một vài điều kiện, hoặc xoá hết bộ lọc để xem toàn bộ danh sách."
+                : "Tạo công việc đầu tiên để cả nhóm thấy việc đang mở và ai đang phụ trách."}
+            </p>
+            {tasks.filtersActive ? (
+              <button type="button" className="btn btn-ghost" onClick={tasks.clearFilters}>
+                Xoá bộ lọc
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setCreating(true)}
+                disabled={!tasks.can("create")}
+              >
+                <PlusGlyph /> Tạo công việc
+              </button>
             )}
           </div>
-          <footer>
-            <Button variant="secondary" onClick={() => setDeletingId(null)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              loading={pending}
-              onClick={async () => {
-                if (pending) return;
-                setPending(true);
-                setActionError("");
-                try {
-                  await client.remove(deleting);
-                  recordsChanged();
-                  setDeletingId(null);
-                  notify("Đã xóa thành công.");
-                } catch (cause) {
-                  setActionError(
-                    cause instanceof Error ? cause.message : "Không thể xóa",
-                  );
-                } finally {
-                  setPending(false);
-                }
-              }}
-            >
-              Xóa
-            </Button>
-          </footer>
-        </Modal>
-      )}
+        ) : view === "table" ? (
+          <TaskTable
+            tasks={rows}
+            loading={tasks.loading}
+            sort={sort}
+            onSort={(key) => setSort((current) => nextSort(current, key))}
+            hidden={hidden}
+            selected={selected}
+            onSelect={toggleRow}
+            onSelectAll={toggleAll}
+            onOpen={(task) => setOpenId(task.id)}
+          />
+        ) : (
+          <div className="surface-body">
+            <KanbanBoard
+              tasks={rows.map((task) => {
+                const moving = optimistic[task.id];
+                return moving ? { ...task, status: moving } : task;
+              })}
+              allowed={moves}
+              pendingId={pendingMove}
+              onMove={move}
+              onOpen={(task) => setOpenId(task.id)}
+            />
+          </div>
+        )}
+
+        {!forbidden && !tasks.error && rows.length > 0 ? (
+          <Pagination
+            page={tasks.query.page}
+            pageSize={tasks.query.pageSize}
+            total={total}
+            onPage={(page) => tasks.patchQuery({ page })}
+            onPageSize={(pageSize) => tasks.patchQuery({ pageSize, page: 1 })}
+          />
+        ) : null}
+      </div>
+
+      <p className="page-footnote">
+        Sắp xếp áp dụng cho các dòng đang tải trên trang này. Kanban hiển thị tối đa 100
+        công việc gần nhất theo bộ lọc hiện tại.
+      </p>
+
+      {askBulk ? (
+        <Confirm
+          title={`Xoá ${selectedTasks.length} công việc đã chọn?`}
+          body="Hành động này không khôi phục được từ giao diện. Lịch sử chuyển trạng thái của từng công việc vẫn được giữ cho kiểm toán."
+          confirmLabel="Xoá vĩnh viễn"
+          busy={bulkBusy}
+          onConfirm={confirmBulk}
+          onClose={() => setAskBulk(false)}
+        />
+      ) : null}
+
+      {creating ? (
+        <CreateTaskDialog onCreate={tasks.create} onClose={() => setCreating(false)} />
+      ) : null}
+
+      {detail ? (
+        <TaskDetailSheet
+          task={detail}
+          canUpdate={tasks.can("update")}
+          canDelete={tasks.can("delete")}
+          canComment={tasks.canComment}
+          onSave={(values) => tasks.patch(detail.id, { ...values, version: detail.version })}
+          onDelete={() => tasks.remove(detail)}
+          onChanged={tasks.reload}
+          onClose={() => setOpenId(null)}
+        />
+      ) : null}
     </div>
   );
 }
