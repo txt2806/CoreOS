@@ -27,6 +27,7 @@ const HOP_BY_HOP = new Set([
   "upgrade",
   "host",
   "content-length",
+  "content-encoding",
 ]);
 
 async function forward(request: NextRequest, path: string[]) {
@@ -75,7 +76,10 @@ async function forward(request: NextRequest, path: string[]) {
   }
   responseHeaders.set("cache-control", "no-store");
 
-  return new NextResponse(upstream.body, {
+  const isStream = upstream.headers.get("content-type")?.includes("text/event-stream");
+  const responseBody = isStream ? upstream.body : await upstream.text();
+
+  return new NextResponse(responseBody, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders,
